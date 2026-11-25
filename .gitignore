@@ -16,3 +16,8 @@ sdl/build_sdl2
 
 *.o
 *.a
+
+build_wiiu/
+/genplus_wiiu.elf
+/genplus_wiiu.rpx
+/genplus_wiiu.wuhb
