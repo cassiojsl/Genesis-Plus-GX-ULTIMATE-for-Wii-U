@@ -70,7 +70,7 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 export LD	:=	$(CC)
-export OFILES	:=	$(CFILES:.c=.o)
+export OFILES	:=	$(CFILES:.c=.o) picodrive_core.o
 export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
 			-I$(CURDIR)/$(BUILD)
@@ -82,13 +82,23 @@ export APP_NAME APP_SHORTNAME APP_AUTHOR ICON
 
 all: $(BUILD)
 
+#---------------------------------------------------------------------------------
+# Sega 32X: the PicoDrive libretro core of picodrive/ as one object (picodrive_core.o),
+# made first (picodrive/Makefile.wiiu). PicoDrive builds its objects inside picodrive/,
+# so they are cleaned when the last build there was for another console.
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
+	@if [ ! -f picodrive/.built_for_wiiu ]; then \
+		$(MAKE) --no-print-directory -C picodrive -f Makefile.libretro platform=wiiu clean >/dev/null 2>&1 || true; \
+		rm -f picodrive/.built_for_wii; touch picodrive/.built_for_wiiu; fi
+	@$(MAKE) --no-print-directory -C picodrive -f Makefile.wiiu OUT=$(CURDIR)/$(BUILD)/picodrive_core.o
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile.wiiu
 
 clean:
 	@echo clean ...
 	@rm -fr $(BUILD) $(TARGET).rpx $(TARGET).wuhb $(TARGET).elf
+	@$(MAKE) --no-print-directory -C picodrive -f Makefile.libretro platform=wiiu clean >/dev/null 2>&1 || true
+	@rm -f picodrive/.built_for_wiiu picodrive/picodrive_all_wiiu.o
 
 #---------------------------------------------------------------------------------
 else

@@ -1,0 +1,28 @@
+# Genesis Plus GX ULTIMATE (Wii U): the Sega 32X, emulated by this PicoDrive
+# libretro core, made into one object, picodrive_core.o, whose only global
+# symbols are the libretro API and the 32X BIOS pointers (pico32x_keep.txt):
+# the rest (zlib, Tremor, the CPU cores...) cannot clash with Genesis Plus GX.
+#
+#   make -f Makefile.wiiu OUT=<path>/picodrive_core.o   (from ../Makefile.wiiu)
+#
+# The SH-2 recompiler is off (use_sh2drc=0): it needs memory that can be
+# written and then executed, which homebrew on the Wii U does not get.
+
+OUT     ?= picodrive_core.o
+PREFIX  := $(DEVKITPPC)/bin/powerpc-eabi-
+CORE    := picodrive_libretro_wiiu.a
+KEEP    := pico32x_keep.txt
+
+.PHONY: all core
+all: $(OUT)
+
+core:
+	@echo "PicoDrive core (32X)"
+	@CFLAGS="-DGPGX_ULTIMATE -O3" $(MAKE) --no-print-directory -f Makefile.libretro \
+		platform=wiiu STATIC_LINKING=0 STATIC_LINKING_LINK=1 use_libchdr=0 use_sh2drc=0 chkCCflag=
+
+$(OUT): core $(KEEP)
+	@$(PREFIX)ld -r $(addprefix -u ,$(shell cat $(KEEP))) -o picodrive_all_wiiu.o $(CORE)
+	@$(PREFIX)objcopy --keep-global-symbols=$(KEEP) picodrive_all_wiiu.o $(OUT)
+	@echo "picodrive_core.o: $$($(PREFIX)nm -g --defined-only $(OUT) | wc -l) global symbols, needs:" \
+		$$($(PREFIX)nm -u $(OUT) | awk '{print $$2}' | tr '\n' ' ')

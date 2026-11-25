@@ -30,6 +30,7 @@
 #include "shared.h"
 #include "md_ntsc.h"
 #include "sms_ntsc.h"
+#include "pico32x_wiiu.h"
 
 #define SOUND_FREQUENCY 48000
 #define SCREEN_W 1280
@@ -340,14 +341,16 @@ static int audio_open(void)
 
 static void audio_push(void)
 {
-  int samples = audio_update(soundframe);          /* stereo sample pairs */
+  /* stereo sample pairs of the frame */
+  int samples = pico32x_active ? pico32x_audio(soundframe, sizeof(soundframe) / 4)
+                               : audio_update(soundframe);
   Uint32 bytes = samples * 2 * sizeof(int16);
   /* about 3 frames of latency: wait while the device has more queued */
   Uint32 limit = (SOUND_FREQUENCY / 20) * 2 * sizeof(int16);
 
   if (!audio_dev)
   {
-    SDL_Delay(vdp_pal ? 20 : 16);
+    SDL_Delay((pico32x_active ? pico32x_is_pal() : vdp_pal) ? 20 : 16);
     return;
   }
 
@@ -591,7 +594,7 @@ static int   nfiles;
 static int has_rom_ext(const char *name)
 {
   static const char *ext[] = { ".md", ".bin", ".gen", ".smd", ".sms", ".gg", ".sg", ".sc",
-                               ".mdx", ".68k", ".cue", ".iso", ".chd", ".zip", NULL };
+                               ".mdx", ".68k", ".32x", ".cue", ".iso", ".chd", ".zip", NULL };
   const char *dot = strrchr(name, '.');
   int i;
   if (!dot) return 0;
@@ -738,6 +741,18 @@ static void backup_load(void)
 {
   char path[1024];
 
+  if (pico32x_active)
+  {
+    int size;
+    uint8 *data = pico32x_sram(&size);
+    if (data && size > 0)
+    {
+      save_path(path, sizeof(path), "srm");
+      read_file(path, data, size);
+    }
+    return;
+  }
+
   if (system_hw == SYSTEM_MCD)
   {
     read_file(SAVE_DIR "/scd.brm", scd.bram, 0x2000);
@@ -763,6 +778,18 @@ static void backup_load(void)
 static void backup_save(void)
 {
   char path[1024];
+
+  if (pico32x_active)
+  {
+    int size;
+    uint8 *data = pico32x_sram(&size);
+    if (data && size > 0)
+    {
+      save_path(path, sizeof(path), "srm");
+      write_file(path, data, size);
+    }
+    return;
+  }
 
   if (system_hw == SYSTEM_MCD)
   {
@@ -794,10 +821,23 @@ static int state_file(int save)
 {
   char path[1024];
   int ok = 0;
-  uint8 *buf = (uint8 *)malloc(STATE_SIZE);
+  int max = pico32x_active ? pico32x_state_size() : STATE_SIZE;
+  uint8 *buf = (uint8 *)malloc(max);
   if (!buf) return 0;
   state_path(path, sizeof(path), port.slot);
-  if (save)
+  if (pico32x_active)
+  {
+    if (save)
+    {
+      int size = pico32x_state_save(buf, max);
+      ok = size > 0 && write_file(path, buf, size) == size;
+    }
+    else if (read_file(path, buf, max) == max)
+    {
+      ok = pico32x_state_load(buf, max);
+    }
+  }
+  else if (save)
   {
     int size = state_save(buf);
     ok = size > 0 && write_file(path, buf, size) == size;
@@ -815,6 +855,21 @@ static int game_start(void)
   load_md_bios();
   apply_padtype();
 
+  if (pico32x_is_32x_file(game_path))
+  {
+    if (!pico32x_load(game_path, port.padtype != PAD_3B, config.region_detect))
+    {
+      char msg[256];
+      snprintf(msg, sizeof(msg), "Nao foi possivel abrir este jogo de 32X. %s", pico32x_last_error());
+      show_message(msg);
+      return 0;
+    }
+    backup_load();
+    bitmap.viewport.changed = 3;
+    if (audio_dev) SDL_ClearQueuedAudio(audio_dev);
+    return 1;
+  }
+
   if (!load_rom(game_path))
   {
     show_message("Nao foi possivel abrir este jogo.");
@@ -830,6 +885,16 @@ static int game_start(void)
   bitmap.viewport.changed = 3;
   if (audio_dev) SDL_ClearQueuedAudio(audio_dev);
   return 1;
+}
+
+/* saves the battery RAM and closes the running game */
+static void game_stop(void)
+{
+  backup_save();
+  if (pico32x_active)
+    pico32x_unload();
+  else
+    audio_shutdown();
 }
 
 /****************************************************************************
@@ -894,7 +959,7 @@ static int settings_menu(int in_game)
         case S_FM:       config.ym3438 = !config.ym3438; reload = 1; break;
         case S_ASPECT:   port.aspect = (port.aspect + ASPECT_COUNT + d) % ASPECT_COUNT; apply_video_settings(); break;
         case S_SMOOTH:   port.smooth = !port.smooth; apply_video_settings(); break;
-        case S_OVERSCAN: config.overscan = (config.overscan + 4 + d) & 3; if (in_game) apply_overscan(); break;
+        case S_OVERSCAN: config.overscan = (config.overscan + 4 + d) & 3; if (in_game && !pico32x_active) apply_overscan(); break;
         case S_FPS:      port.show_fps = !port.show_fps; break;
       }
     }
@@ -905,8 +970,7 @@ static int settings_menu(int in_game)
 
   if (in_game && reload)
   {
-    backup_save();
-    audio_shutdown();
+    game_stop();
     game_start();
     osd_message("Jogo reiniciado com as novas configuracoes");
   }
@@ -971,7 +1035,7 @@ static int pause_menu(void)
       if (sel == P_SLOT) port.slot = (port.slot + 1) % 10;
       if (sel == P_RESET)
       {
-        system_reset();
+        if (pico32x_active) pico32x_reset(); else system_reset();
         osd_message("Jogo reiniciado");
         break;
       }
@@ -1025,7 +1089,9 @@ static int game_loop(void)
       }
     }
 
-    if (system_hw == SYSTEM_MCD)
+    if (pico32x_active)
+      pico32x_frame(pad_read(pads[0]), pad_read(pads[1]));
+    else if (system_hw == SYSTEM_MCD)
       system_frame_scd(0);
     else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
       system_frame_gen(0);
@@ -1081,8 +1147,7 @@ int main(int argc, char **argv)
   {
     if (!game_start()) continue;
     running = game_loop();
-    backup_save();
-    audio_shutdown();
+    game_stop();
   }
 
   config_save();

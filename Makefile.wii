@@ -112,6 +112,9 @@ export OUTPUT	:=	$(CURDIR)/$(TARGET)
 # (15 MB) is allocated at start-up, which leaves room in MEM1 for PicoDrive.
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
+	@if [ ! -f picodrive/.built_for_wii ]; then \
+		$(MAKE) --no-print-directory -C picodrive -f Makefile.libretro platform=wii clean >/dev/null 2>&1 || true; \
+		rm -f picodrive/.built_for_wiiu; touch picodrive/.built_for_wii; fi
 	@$(MAKE) --no-print-directory -C picodrive -f Makefile.gx OUT=$(CURDIR)/$(BUILD)/picodrive_core.o
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile.wii
 

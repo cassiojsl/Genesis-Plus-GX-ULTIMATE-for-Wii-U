@@ -21,3 +21,7 @@ build_wiiu/
 /genplus_wiiu.elf
 /genplus_wiiu.rpx
 /genplus_wiiu.wuhb
+picodrive/.built_for_wii
+picodrive/.built_for_wiiu
+picodrive/picodrive_all_wiiu.o
+picodrive/picodrive_core_wiiu.o
