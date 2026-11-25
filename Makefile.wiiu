@@ -1,0 +1,106 @@
+#---------------------------------------------------------------------------------
+# Genesis Plus GX - native Wii U port (wut)
+#
+# Requires devkitPro with devkitPPC + wut:
+#   (dkp-)pacman -S wiiu-dev
+#   export DEVKITPRO=/opt/devkitpro
+#   make -f Makefile.wiiu
+#
+# Output: genplus_wiiu.rpx and genplus_wiiu.wuhb (Aroma)
+#---------------------------------------------------------------------------------
+.SUFFIXES:
+
+ifeq ($(strip $(DEVKITPRO)),)
+$(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/devkitpro")
+endif
+
+TOPDIR ?= $(CURDIR)
+
+include $(DEVKITPRO)/wut/share/wut_rules
+
+#---------------------------------------------------------------------------------
+# metadata (used by wuhbtool)
+#---------------------------------------------------------------------------------
+APP_NAME	:=	Genesis Plus GX
+APP_SHORTNAME	:=	GenPlusGX
+APP_AUTHOR	:=	Eke-Eke / GenesisPlusGX-ULTIMATE
+ICON		:=	$(TOPDIR)/gx/hbc/icon.png
+
+CHDLIBDIR	:=	core/cd_hw/libchdr
+
+TARGET		:=	genplus_wiiu
+BUILD		:=	build_wiiu
+SOURCES		:=	wiiu sdl \
+			core core/m68k core/z80 core/sound core/sound/tremor core/ntsc core/input_hw core/cd_hw core/cart_hw core/cart_hw/svp \
+			$(CHDLIBDIR)/src $(CHDLIBDIR)/deps/lzma-24.05/src $(CHDLIBDIR)/deps/zstd-1.5.6/lib/common $(CHDLIBDIR)/deps/zstd-1.5.6/lib/decompress
+# wiiu must come before sdl so that wiiu/osd.h and wiiu/main.h win
+INCLUDES	:=	wiiu sdl \
+			core core/m68k core/z80 core/sound core/sound/minimp3 core/sound/tremor core/ntsc core/input_hw core/cd_hw core/cart_hw core/cart_hw/svp \
+			$(CHDLIBDIR)/include $(CHDLIBDIR)/deps/lzma-24.05/include $(CHDLIBDIR)/deps/zstd-1.5.6/lib $(CHDLIBDIR)/deps/zstd-1.5.6/lib/common
+
+#---------------------------------------------------------------------------------
+# code generation
+# Wii U (Espresso) is big endian: LSB_FIRST must NOT be defined.
+#---------------------------------------------------------------------------------
+DEFINES		:=	-DUSE_32BPP_RENDERING -DUSE_LIBTREMOR -DUSE_LIBCHDR -DMAXROMSIZE=33554432 \
+			-DHAVE_YM3438_CORE -DHAVE_OPLL_CORE -DENABLE_SUB_68K_ADDRESS_ERROR_EXCEPTIONS \
+			-DCPU_IS_BIG_ENDIAN=1 -DWORDS_BIGENDIAN=1 -DHAVE_LROUND -DHAVE_STDINT_H -DHAVE_SYS_PARAM_H \
+			-DZ7_ST -DZSTD_DISABLE_ASM -DM68K_OVERCLOCK_SHIFT=20 -DZ80_OVERCLOCK_SHIFT=20 -D__WIIU__
+
+CFLAGS		:=	-O3 -ffunction-sections -fomit-frame-pointer -Wall -Wno-strict-aliasing \
+			$(MACHDEP) $(INCLUDE) $(DEFINES) -D__WUT__
+CXXFLAGS	:=	$(CFLAGS)
+ASFLAGS		:=	-g $(ARCH)
+LDFLAGS		=	-g $(ARCH) $(RPXSPECS) -Wl,-Map,$(notdir $*.map)
+
+LIBS		:=	-lwut -lz -lm
+LIBDIRS		:=	$(PORTLIBS) $(WUT_ROOT)
+
+#---------------------------------------------------------------------------------
+ifneq ($(BUILD),$(notdir $(CURDIR)))
+#---------------------------------------------------------------------------------
+
+export OUTPUT	:=	$(CURDIR)/$(TARGET)
+export TOPDIR	:=	$(CURDIR)
+export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
+export DEPSDIR	:=	$(CURDIR)/$(BUILD)
+
+CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+export LD	:=	$(CC)
+export OFILES	:=	$(CFILES:.c=.o)
+export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
+			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
+			-I$(CURDIR)/$(BUILD)
+export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+
+export APP_NAME APP_SHORTNAME APP_AUTHOR ICON
+
+.PHONY: $(BUILD) clean all
+
+all: $(BUILD)
+
+$(BUILD):
+	@[ -d $@ ] || mkdir -p $@
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile.wiiu
+
+clean:
+	@echo clean ...
+	@rm -fr $(BUILD) $(TARGET).rpx $(TARGET).wuhb $(TARGET).elf
+
+#---------------------------------------------------------------------------------
+else
+.PHONY: all
+
+DEPENDS	:=	$(OFILES:.o=.d)
+
+all	:	$(OUTPUT).wuhb
+
+$(OUTPUT).wuhb	:	$(OUTPUT).rpx
+$(OUTPUT).rpx	:	$(OUTPUT).elf
+$(OUTPUT).elf	:	$(OFILES)
+
+-include $(DEPENDS)
+
+#---------------------------------------------------------------------------------
+endif
+#---------------------------------------------------------------------------------
