@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <strings.h>
 #include <coreinit/memory.h>
+#include <coreinit/codegen.h>
 
 #include "shared.h"
 #include "md_ntsc.h"
@@ -94,6 +95,22 @@ static char   osd_text[128];
 static uint32 osd_until;
 
 static uint32 fps_count, fps_value, fps_time;
+
+/* can this app generate and run code (JIT)? needed for PicoDrive's fast
+   SH-2 recompiler on 32X games. Shown in the game list for testing. */
+static char jit_info[96];
+
+static void jit_probe(void)
+{
+  void *addr = NULL;
+  uint32_t size = 0;
+  OSGetCodegenVirtAddrRange(&addr, &size);
+  if (addr && size)
+    snprintf(jit_info, sizeof(jit_info), "JIT: disponivel (%u KB, core %u)",
+             (unsigned)(size / 1024), (unsigned)OSGetCodegenCore());
+  else
+    snprintf(jit_info, sizeof(jit_info), "JIT: indisponivel");
+}
 
 static const SDL_Color COL_WHITE = { 255, 255, 255, 255 };
 static const SDL_Color COL_GREY  = { 150, 150, 170, 255 };
@@ -692,6 +709,7 @@ static int rom_browser(void)
       for (i = top; i < nfiles && i < top + rows; i++)
         draw_text(80, 80 + (i - top) * row_h, files[i], i == sel ? COL_HI : COL_WHITE);
     }
+    draw_text(SCREEN_W - 460, SCREEN_H - 90, jit_info, COL_GREY);
     draw_text(60, SCREEN_H - 44, "A: jogar    L/R: pagina    +: configuracoes    HOME: sair", COL_GREY);
     SDL_RenderPresent(renderer);
     SDL_Delay(16);
@@ -1135,6 +1153,7 @@ int main(int argc, char **argv)
   audio_open();
   font_init();
   pads_open();
+  jit_probe();
 
   memset(&bitmap, 0, sizeof(t_bitmap));
   bitmap.width  = 720;
