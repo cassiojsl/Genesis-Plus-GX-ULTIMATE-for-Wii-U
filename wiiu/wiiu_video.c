@@ -94,6 +94,7 @@
 #include "CD_access_on_png.h"
 #include "CD_ready_off_png.h"
 #include "CD_ready_on_png.h"
+#include "varela_round_ttf.h"
 
 #define SCREEN_W 1280
 #define SCREEN_H 720
@@ -851,9 +852,20 @@ static const void *font_data;
 static uint32_t font_bytes;
 static float font_scale = (float)SCREEN_H / 480.0f;   /* screen pixels per menu pixel, vertically */
 
+/* the IPL font is a little wider than Varela Round: the menus place some
+   things after text with the widths of the Wii */
+#define FONT_WIDEN 1.15f
+
+/* Varela Round (SIL Open Font License, wiiu/fonts): a free rounded font
+   close to the IPL font of the GameCube and Wii, which is in their ROM and
+   cannot be read on the Wii U nor shipped. The Wii U system font is the
+   fallback. */
 int FONT_Init(void)
 {
   if (TTF_Init() < 0) return 0;
+  font_data = varela_round_ttf;
+  font_bytes = varela_round_ttf_size;
+  if (font_bytes) return 1;
   return wiiu_system_font(&font_data, &font_bytes);
 }
 
@@ -907,8 +919,12 @@ static int glyph_load(font_cache *f, u8 c)
   {
     int minx, maxx, miny, maxy, advance = 0;
     if (TTF_GlyphMetrics(f->font, c, &minx, &maxx, &miny, &maxy, &advance) == 0)
-      f->adv[c] = (int)(advance / font_scale + 0.5f);
+      f->adv[c] = (int)(advance * FONT_WIDEN / font_scale + 0.5f);
     if (f->adv[c] <= 0) f->adv[c] = 1;
+    /* spaces as wide as in the IPL font: the menus leave room for button
+       icons with them ("Press    to continue.") */
+    if ((c == ' ') && (f->adv[c] < (f->size * 40) / 100))
+      f->adv[c] = (f->size * 40) / 100;
     if (c > ' ')
     {
       SDL_Color white = { 255, 255, 255, 255 };
@@ -939,7 +955,7 @@ static void draw_char(font_cache *f, u8 c, int x, int y, GXColor color)
   if (!f->glyph[c]) return;
   r.x = x;
   r.y = y - f->size;
-  r.w = (int)(f->gw[c] / font_scale + 0.5f);
+  r.w = (int)(f->gw[c] * FONT_WIDEN / font_scale + 0.5f);
   r.h = (int)(f->gh[c] / font_scale + 0.5f);
   LOCK();
   SDL_SetTextureColorMod(f->glyph[c], color.r, color.g, color.b);
