@@ -4,6 +4,10 @@
 
 **Genesis Plus GX ULTIMATE** (VrepliroidV) é baseado no Genesis Plus GX 1.7.5 (Eke-Eke): jogos de 32X (emulados pelo PicoDrive), Paprium (com o chip do cartucho do Genesis Plus GX PUNCHiUM), controles USB do tipo Xbox 360 e receptores 2.4 GHz no Wii, molduras em PNG, Auto Crop, overclock automático, configurações por jogo e música no menu (pasta `genplusultimate/music`) com mini player. É um app separado (`apps/genplusultimate`, dados em `genplusultimate/`). Downloads em [Releases](../../releases).
 
+**Wii U:** a native Wii U port with the same interface as the Wii version (widescreen menus, GamePad touch screen, Wii Remote, Classic and Pro Controllers, 32X, bezels, Auto Crop) is in `wiiu/`, built with `make -f Makefile.wiiu` (devkitPro wut). It has not been tested on a Wii U yet. See [wiiu/README.md](wiiu/README.md).
+
+**Wii U:** port nativo para Wii U com a mesma interface da versão de Wii (menus em widescreen, tela de toque do GamePad, Wiimote, Classic e Pro Controller, 32X, bezels, Auto Crop), em `wiiu/`. Ainda não foi testado num Wii U. Veja [wiiu/README.md](wiiu/README.md).
+
 The original Genesis Plus GX readme follows.
 
 ----
