@@ -1994,8 +1994,22 @@ static void *MsgBox_Thread(gui_message *message_box)
       }
       else
       {
+#ifdef HW_WUP
+        /* Wii U: the font is not the IPL font of the Wii, the icon goes
+           after the width of "Press", with a space on each side */
+        gx_texture *a = message_box->buttonA;
+        int gap = 6;
+        int w = FONT_getWidth("Press",18) + gap + a->width + gap + FONT_getWidth("to continue.",18);
+        int x = 166 + (message_box->window->width - w) / 2;
+        FONT_write("Press",18,x,248+18+4,640,(GXColor)WHITE);
+        x += FONT_getWidth("Press",18) + gap;
+        gxDrawTexture(a, x, 248+4+(18-a->height)/2, a->width, a->height, 255);
+        x += a->width + gap;
+        FONT_write("to continue.",18,x,248+18+4,640,(GXColor)WHITE);
+#else
         FONT_writeCenter("Press    to continue.",18,166,166+message_box->window->width,248+18+4,(GXColor)WHITE);
         gxDrawTexture(message_box->buttonA, 166+116, 248+4+(18-message_box->buttonA->height)/2,message_box->buttonA->width, message_box->buttonA->height,255);
+#endif
       }
     }
 
