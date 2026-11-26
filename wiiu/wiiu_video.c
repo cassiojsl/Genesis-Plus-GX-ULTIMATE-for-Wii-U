@@ -335,7 +335,9 @@ void gxTextureClose(gx_texture **p_texture)
 #endif
 
 #define MENU_FULL_W   854                     /* 1280 / 1.5 */
-#define MENU_OX       ((MENU_FULL_W - 640) / 2)
+/* even, so that every edge falls on a whole screen pixel at x1.5 (pieces
+   of banners that touch would show a gap or overlap otherwise) */
+#define MENU_OX       106
 #define BANNER_PERIOD 36                      /* the grid of the banners */
 #define BANNER_EDGE   72                      /* their ends, with the corners of the frame */
 
@@ -418,12 +420,21 @@ void gxDrawTexture(gx_texture *texture, s32 x, s32 y, s32 w, s32 h, u8 alpha)
 
     banner_piece(t, texture, w, mid_l, mid_r - mid_l, r.x + mid_l, r.y, r.h);
 
+    /* the pieces touch without overlapping: the shadows are translucent,
+       drawn twice they would show darker */
     for (dx = r.x + mid_l - BANNER_PERIOD; dx + BANNER_PERIOD > BANNER_EDGE; dx -= BANNER_PERIOD)
-      banner_piece(t, texture, w, mid_l, BANNER_PERIOD, dx, r.y, r.h);
+    {
+      int cut = (dx < BANNER_EDGE) ? (BANNER_EDGE - dx) : 0;
+      banner_piece(t, texture, w, mid_l + cut, BANNER_PERIOD - cut, dx + cut, r.y, r.h);
+    }
     banner_piece(t, texture, w, 0, BANNER_EDGE, 0, r.y, r.h);
 
     for (dx = r.x + mid_r; dx < view_w - BANNER_EDGE; dx += BANNER_PERIOD)
-      banner_piece(t, texture, w, mid_r - BANNER_PERIOD, BANNER_PERIOD, dx, r.y, r.h);
+    {
+      int pw = BANNER_PERIOD;
+      if (dx + pw > view_w - BANNER_EDGE) pw = view_w - BANNER_EDGE - dx;
+      banner_piece(t, texture, w, mid_r - BANNER_PERIOD, pw, dx, r.y, r.h);
+    }
     banner_piece(t, texture, w, w - BANNER_EDGE, BANNER_EDGE, view_w - BANNER_EDGE, r.y, r.h);
   }
   else
