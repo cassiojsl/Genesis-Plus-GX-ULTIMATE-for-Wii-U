@@ -839,6 +839,14 @@ static void prefmenu ()
   else if (config.s_auto == 2) sprintf (items[2].text, "Auto Saves: STATE ONLY");
   else if (config.s_auto == 1) sprintf (items[2].text, "Auto Saves: SRAM ONLY");
   else sprintf (items[2].text, "Auto Saves: NONE");
+#ifdef HW_WUP
+  /* Wii U: the SD card only (no DVD drive, no memory cards, USB drives are
+     not read yet) */
+  config.l_device = TYPE_SD;
+  config.s_device = 0;
+  sprintf (items[3].text, "ROM Load Device: SD");
+  sprintf (items[4].text, "Saves Device: SD");
+#else
 #ifdef HW_RVL
   if (config.l_device == TYPE_USB) sprintf (items[3].text, "ROM Load Device: USB");
   else if (config.l_device == TYPE_DVD) sprintf (items[3].text, "ROM Load Device: DVD");
@@ -849,6 +857,7 @@ static void prefmenu ()
   if (config.s_device == 1) sprintf (items[4].text, "Saves Device: MCARD A");
   else if (config.s_device == 2) sprintf (items[4].text, "Saves Device: MCARD B");
   else sprintf (items[4].text, "Saves Device: FAT");
+#endif
   sprintf (items[5].text, "SFX Volume: %1.1f", config.sfx_volume);
   sprintf (items[6].text, "BGM Volume: %1.1f", config.bgm_volume);
   menu_music_text(&items[7]);
@@ -910,6 +919,9 @@ static void prefmenu ()
         break;
 
       case 3:   /*** Default ROM device ***/
+#ifdef HW_WUP
+        break;
+#endif
 #ifdef HW_RVL
         config.l_device = (config.l_device + 1) % (TYPE_DVD + 1);
         if (config.l_device == TYPE_USB) sprintf (items[3].text, "ROM Load Device: USB");
@@ -922,6 +934,9 @@ static void prefmenu ()
         break;
 
       case 4:   /*** Default saves device ***/
+#ifdef HW_WUP
+        break;
+#endif
         config.s_device = (config.s_device + 1) % 3;
         if (config.s_device == 1) sprintf (items[4].text, "Saves Device: MCARD A");
         else if (config.s_device == 2) sprintf (items[4].text, "Saves Device: MCARD B");

@@ -618,6 +618,35 @@ static SDL_Rect game_rect(void)
   return r;
 }
 
+/* Gamma Correction of the video menu (VI hardware on the Wii): a table of
+   the 65536 RGB565 colors, made again when the setting changes */
+static u16 *gamma_lut;
+static float gamma_lut_value = 1.0f;
+
+static int gamma_update(void)
+{
+  float g = config.gamma;
+  if ((g > 0.99f) && (g < 1.01f))
+    return 0;
+  if (!gamma_lut)
+  {
+    gamma_lut = (u16 *)malloc(65536 * sizeof(u16));
+    if (!gamma_lut) return 0;
+    gamma_lut_value = 0.0f;
+  }
+  if (g != gamma_lut_value)
+  {
+    u8 c5[32], c6[64];
+    int i;
+    for (i = 0; i < 32; i++) c5[i] = (u8)(powf(i / 31.0f, 1.0f / g) * 31.0f + 0.5f);
+    for (i = 0; i < 64; i++) c6[i] = (u8)(powf(i / 63.0f, 1.0f / g) * 63.0f + 0.5f);
+    for (i = 0; i < 65536; i++)
+      gamma_lut[i] = (c5[i >> 11] << 11) | (c6[(i >> 5) & 63] << 5) | c5[i & 31];
+    gamma_lut_value = g;
+  }
+  return 1;
+}
+
 /* the bitmap, from its 4x4 tiles of RGB565 pixels to lines */
 static void untile(void)
 {
@@ -635,6 +664,17 @@ static void untile(void)
       out[3] = row[3];
       out += 4;
       row += 16;
+    }
+  }
+
+  if (gamma_update())
+  {
+    u16 *p = untiled;
+    int n = vwidth * vheight;
+    while (n--)
+    {
+      *p = gamma_lut[*p];
+      p++;
     }
   }
 }
