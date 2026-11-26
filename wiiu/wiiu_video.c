@@ -340,6 +340,8 @@ void gxTextureClose(gx_texture **p_texture)
 #define MENU_OX       106
 #define BANNER_PERIOD 36                      /* the grid of the banners */
 #define BANNER_EDGE   72                      /* their ends, with the corners of the frame */
+#define TOP_BANNER_H     108                  /* the top banner (Banner_top.png) */
+#define TOP_BANNER_SPLIT 396                  /* a grid line before its curve */
 
 static int view_ox;      /* where the 640 wide Wii screen starts */
 static int anchor_dx;    /* moves what is at a side of the Wii screen to that side of the picture */
@@ -427,7 +429,31 @@ void gxDrawTexture(gx_texture *texture, s32 x, s32 y, s32 w, s32 h, u8 alpha)
   LOCK();
   SDL_SetTextureAlphaMod(t->tex, alpha);
 
-  if (view_ox && FULL_WIDTH(x, w) && (w > 2 * BANNER_EDGE))
+  if (view_ox && FULL_WIDTH(x, w) && (w == 640) && (texture->height == TOP_BANNER_H))
+  {
+    /* the top banner: its curve goes down to the logo, which is at the right
+       of the picture (wiiu_set_anchor): the part from the curve on moves
+       right with it, the part before it stays at the left, the grid of the
+       flat part before the curve fills between them */
+    int right_x = TOP_BANNER_SPLIT + 2 * MENU_OX;
+    int end_x = view_w - BANNER_EDGE;
+    int dx;
+
+    banner_piece(t, texture, w, 0, TOP_BANNER_SPLIT, 0, r.y, r.h);
+    for (dx = TOP_BANNER_SPLIT; dx < right_x; dx += BANNER_PERIOD)
+    {
+      int pw = (dx + BANNER_PERIOD > right_x) ? (right_x - dx) : BANNER_PERIOD;
+      banner_piece(t, texture, w, TOP_BANNER_SPLIT - BANNER_PERIOD, pw, dx, r.y, r.h);
+    }
+    banner_piece(t, texture, w, TOP_BANNER_SPLIT, w - BANNER_EDGE - TOP_BANNER_SPLIT, right_x, r.y, r.h);
+    for (dx = right_x + w - BANNER_EDGE - TOP_BANNER_SPLIT; dx < end_x; dx += BANNER_PERIOD)
+    {
+      int pw = (dx + BANNER_PERIOD > end_x) ? (end_x - dx) : BANNER_PERIOD;
+      banner_piece(t, texture, w, w - BANNER_EDGE - BANNER_PERIOD, pw, dx, r.y, r.h);
+    }
+    banner_piece(t, texture, w, w - BANNER_EDGE, BANNER_EDGE, end_x, r.y, r.h);
+  }
+  else if (view_ox && FULL_WIDTH(x, w) && (w > 2 * BANNER_EDGE))
   {
     /* a banner across the screen: its middle in place, its ends (the
        corners of the frame) at the edges of the 16:9 picture, and periods
