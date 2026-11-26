@@ -1,10 +1,16 @@
 #---------------------------------------------------------------------------------
-# Genesis Plus GX - native Wii U port (wut)
+# Genesis Plus GX ULTIMATE - Wii U port (wut)
 #
-# Requires devkitPro with devkitPPC + wut:
-#   (dkp-)pacman -S wiiu-dev wiiu-sdl2 wiiu-sdl2_ttf
-#   export DEVKITPRO=/opt/devkitpro
+# The Wii port (gx/: menus, settings, file browser, cheats, 32X bridge...) is
+# built as it is, with the headers of libogc. What talks to the Wii hardware
+# is replaced by wiiu/: video, sound, fonts and the libogc functions the Wii
+# code calls (controllers, threads, timers, files), written with wut + SDL2.
+#
+# Requires devkitPro with devkitPPC, wut, libogc (headers only) and SDL2:
+#   (dkp-)pacman -S wiiu-dev wii-dev wiiu-sdl2 wiiu-sdl2_ttf wiiu-sdl2_image
 #   make -f Makefile.wiiu
+# or with Docker:
+#   docker run --rm -v "$PWD":/src -w /src devkitpro/devkitppc make -f Makefile.wiiu
 #
 # Output: genplus_wiiu.rpx and genplus_wiiu.wuhb (Aroma)
 #---------------------------------------------------------------------------------
@@ -21,42 +27,42 @@ include $(DEVKITPRO)/wut/share/wut_rules
 #---------------------------------------------------------------------------------
 # metadata (used by wuhbtool)
 #---------------------------------------------------------------------------------
-APP_NAME	:=	Genesis Plus GX
+APP_NAME	:=	Genesis Plus GX ULTIMATE
 APP_SHORTNAME	:=	GenPlusGX
-APP_AUTHOR	:=	Eke-Eke / GenesisPlusGX-ULTIMATE
+APP_AUTHOR	:=	Eke-Eke / VrepliroidV
 ICON		:=	$(TOPDIR)/gx/hbc/icon.png
 
 CHDLIBDIR	:=	core/cd_hw/libchdr
 
 TARGET		:=	genplus_wiiu
 BUILD		:=	build_wiiu
-SOURCES		:=	wiiu sdl \
-			core core/m68k core/z80 core/sound core/sound/tremor core/ntsc core/input_hw core/cd_hw core/cart_hw core/cart_hw/svp \
-			$(CHDLIBDIR)/src $(CHDLIBDIR)/deps/lzma-24.05/src $(CHDLIBDIR)/deps/zstd-1.5.6/lib/common $(CHDLIBDIR)/deps/zstd-1.5.6/lib/decompress
-# wiiu must come before sdl so that wiiu/osd.h and wiiu/main.h win
-INCLUDES	:=	wiiu sdl \
-			core core/m68k core/z80 core/sound core/sound/minimp3 core/sound/tremor core/ntsc core/input_hw core/cd_hw core/cart_hw core/cart_hw/svp \
-			$(CHDLIBDIR)/include $(CHDLIBDIR)/deps/lzma-24.05/include $(CHDLIBDIR)/deps/zstd-1.5.6/lib $(CHDLIBDIR)/deps/zstd-1.5.6/lib/common
+SOURCES		:=	core core/m68k core/z80 core/sound core/sound/tremor core/ntsc core/input_hw core/cd_hw core/cart_hw core/cart_hw/svp \
+			$(CHDLIBDIR)/src $(CHDLIBDIR)/deps/lzma-24.05/src $(CHDLIBDIR)/deps/zstd-1.5.6/lib/common $(CHDLIBDIR)/deps/zstd-1.5.6/lib/decompress \
+			gx gx/utils gx/gui gx/fileio gx/images gx/sounds wiiu
+INCLUDES	:=	core core/m68k core/z80 core/sound core/sound/minimp3 core/sound/tremor core/ntsc core/input_hw core/cd_hw core/cart_hw core/cart_hw/svp \
+			$(CHDLIBDIR)/include $(CHDLIBDIR)/deps/lzma-24.05/include $(CHDLIBDIR)/deps/zstd-1.5.6/lib $(CHDLIBDIR)/deps/zstd-1.5.6/lib/common \
+			gx gx/utils gx/utils/wiidrc gx/gui gx/fileio gx/images gx/sounds wiiu
+
+# Wii files that drive the Wii hardware: replaced by wiiu/
+EXCLUDE		:=	gx_video.c gx_audio.c font.c vi_encoder.c xinput_usb.c usbpad_shim.c
 
 #---------------------------------------------------------------------------------
-# code generation
-# Wii U (Espresso) is big endian: LSB_FIRST must NOT be defined.
+# code generation: the same options as the Wii build (Makefile.wii)
 #---------------------------------------------------------------------------------
-DEFINES		:=	-DUSE_32BPP_RENDERING -DUSE_LIBTREMOR -DUSE_LIBCHDR -DMAXROMSIZE=33554432 \
-			-DHAVE_YM3438_CORE -DHAVE_OPLL_CORE -DENABLE_SUB_68K_ADDRESS_ERROR_EXCEPTIONS \
-			-DCPU_IS_BIG_ENDIAN=1 -DWORDS_BIGENDIAN=1 -DHAVE_LROUND -DHAVE_STDINT_H -DHAVE_SYS_PARAM_H \
-			-DZ7_ST -DZSTD_DISABLE_ASM -DM68K_OVERCLOCK_SHIFT=20 -DZ80_OVERCLOCK_SHIFT=20 -D__WIIU__
+MACHDEP		:=	-DGEKKO -DHW_RVL -DHW_WUP -D__WIIU__ -D__WUT__ -mcpu=750 -meabi -mhard-float
 
-CFLAGS		:=	-O3 -ffunction-sections -fomit-frame-pointer -Wall -Wno-strict-aliasing \
-			$(MACHDEP) $(INCLUDE) $(DEFINES) -D__WUT__
+CFLAGS		:=	-O3 -ffunction-sections -fomit-frame-pointer -Wall -Wno-strict-aliasing -Wno-unused-but-set-variable \
+			$(MACHDEP) $(INCLUDE) \
+			-DMAXROMSIZE=15728640 -DUSE_LIBTREMOR -DUSE_LIBCHDR -DUSE_16BPP_RENDERING -DALT_RENDERER -DBLIP_INVERT \
+			-DCPU_IS_BIG_ENDIAN=1 -DWORDS_BIGENDIAN=1 -DHAVE_LROUND -DHAVE_STDINT_H -DHAVE_SYS_PARAM_H -DZ7_ST \
+			-DM68K_OVERCLOCK_SHIFT=20 -DZ80_OVERCLOCK_SHIFT=20 -DUSE_DYNAMIC_ALLOC
 CXXFLAGS	:=	$(CFLAGS)
-ASFLAGS		:=	-g $(ARCH)
-LDFLAGS		=	-g $(ARCH) $(RPXSPECS) -Wl,-Map,$(notdir $*.map)
+ASFLAGS		:=	$(MACHDEP)
+LDFLAGS		=	-g $(MACHDEP) $(RPXSPECS) -Wl,-Map,$(notdir $*.map)
 
-# SDL2 + SDL2_ttf from the devkitPro portlibs (wiiu-sdl2, wiiu-sdl2_ttf)
+# SDL2 + SDL2_ttf + SDL2_image from the devkitPro portlibs
 PKGCONF		:=	$(DEVKITPRO)/portlibs/wiiu/bin/powerpc-eabi-pkg-config
-CFLAGS		+=	$(shell $(PKGCONF) --cflags SDL2_ttf sdl2 2>/dev/null)
-LIBS		:=	$(shell $(PKGCONF) --libs SDL2_ttf sdl2 2>/dev/null) -lwut -lz -lm
+LIBS		:=	$(shell $(PKGCONF) --libs SDL2_ttf SDL2_image sdl2 2>/dev/null) -lwut -lz -lm
 LIBDIRS		:=	$(PORTLIBS) $(WUT_ROOT)
 
 #---------------------------------------------------------------------------------
@@ -68,12 +74,23 @@ export TOPDIR	:=	$(CURDIR)
 export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
 export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
-CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+CFILES		:=	$(filter-out $(EXCLUDE),$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c))))
+PNGFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.png)))
+PCMFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.pcm)))
+OGGFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.ogg)))
+
 export LD	:=	$(CC)
-export OFILES	:=	$(CFILES:.c=.o) picodrive_core.o
+export OFILES_BIN :=	$(PNGFILES:.png=.png.o) $(PCMFILES:.pcm=.pcm.o) $(OGGFILES:.ogg=.ogg.o)
+export OFILES_SOURCES := $(CFILES:.c=.o)
+export OFILES	:=	$(OFILES_BIN) $(OFILES_SOURCES) picodrive_core.o
+export HFILES	:=	$(PNGFILES:.png=_png.h) $(PCMFILES:.pcm=_pcm.h) $(OGGFILES:.ogg=_ogg.h)
+
+# wut and SDL first, the libogc headers last (the Wii code includes <gccore.h>...)
 export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
-			-I$(CURDIR)/$(BUILD)
+			-I$(DEVKITPRO)/portlibs/wiiu/include/SDL2 \
+			-I$(CURDIR)/$(BUILD) \
+			-idirafter $(DEVKITPRO)/libogc/include
 export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 export APP_NAME APP_SHORTNAME APP_AUTHOR ICON
@@ -111,6 +128,20 @@ all	:	$(OUTPUT).wuhb
 $(OUTPUT).wuhb	:	$(OUTPUT).rpx
 $(OUTPUT).rpx	:	$(OUTPUT).elf
 $(OUTPUT).elf	:	$(OFILES)
+
+$(OFILES_SOURCES) : $(HFILES)
+
+%.png.o	%_png.h :	%.png
+	$(SILENTMSG) $(notdir $<)
+	$(SILENTCMD)$(bin2o)
+
+%.pcm.o	%_pcm.h :	%.pcm
+	$(SILENTMSG) $(notdir $<)
+	$(SILENTCMD)$(bin2o)
+
+%.ogg.o	%_ogg.h :	%.ogg
+	$(SILENTMSG) $(notdir $<)
+	$(SILENTCMD)$(bin2o)
 
 -include $(DEPENDS)
 
