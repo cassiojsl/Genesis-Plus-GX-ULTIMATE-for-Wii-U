@@ -62,7 +62,22 @@
 #include "usbpad_shim.h"
 #endif
 
+/* the loader stub is started with __lwp_thread_stopmultitasking in older
+   libogc versions (ogc/lwp_threads.h); current libogc does it on exit() */
+#if defined(__has_include)
+#if __has_include(<ogc/lwp_threads.h>)
 #include <ogc/lwp_threads.h>
+#define HAVE_LWP_THREADS_H 1
+#endif
+#else
+#include <ogc/lwp_threads.h>
+#define HAVE_LWP_THREADS_H 1
+#endif
+#ifdef HAVE_LWP_THREADS_H
+#define EXIT_TO_LOADER() __lwp_thread_stopmultitasking(*reload)
+#else
+#define EXIT_TO_LOADER() exit(0)
+#endif
 #include <ogc/lwp_watchdog.h>
 
 /* Credits */
@@ -4453,7 +4468,7 @@ static void exitmenu(void)
       GUI_FadeOut();
       shutdown();
       SYS_ResetSystem(SYS_SHUTDOWN,0,0);
-      __lwp_thread_stopmultitasking(*reload);
+      EXIT_TO_LOADER();
       break;
 
     default:
@@ -4511,7 +4526,7 @@ void mainmenu(void)
     {
       /* exit to loader if requested */
       SYS_ResetSystem(SYS_SHUTDOWN,0,0);
-      __lwp_thread_stopmultitasking(*reload);
+      EXIT_TO_LOADER();
     }
     else
     {

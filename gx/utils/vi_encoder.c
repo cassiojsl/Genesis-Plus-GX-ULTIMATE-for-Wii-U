@@ -51,7 +51,17 @@
 #define _SHIFTR(v, s, w)	\
     ((u32)(((u32)(v) >> (s)) & ((0x01 << (w)) - 1)))
 
+/* libogc 3 (tuxedo) has udelay inline in ogc/lwp_watchdog.h, older
+   versions have it in the library */
+#if defined(__has_include)
+#if __has_include(<tuxedo/ppc/clock.h>)
+#include <ogc/lwp_watchdog.h>
+#define HAVE_INLINE_UDELAY 1
+#endif
+#endif
+#ifndef HAVE_INLINE_UDELAY
 extern void udelay(int us);
+#endif
 
 static u32 i2cIdentFirst = 0;
 static u32 i2cIdentFlag = 1;
