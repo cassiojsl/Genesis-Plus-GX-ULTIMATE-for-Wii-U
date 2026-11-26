@@ -122,6 +122,8 @@ static SDL_mutex *render_lock;
 static SDL_Texture *screen_tex;
 static int screen_w, screen_h;      /* texture size */
 static int vwidth, vheight;         /* picture size in the bitmap */
+int wiiu_vsync;                     /* the game picture waits for the vertical blank */
+static struct { int w, h, x, y, h40; } vp = { 320, 224, 0, 0, 1 }; /* viewport of the picture shown */
 static u16 *untiled;                /* the bitmap without its tiles */
 static int screen_ready;
 
@@ -545,6 +547,9 @@ void gxClearScreen(GXColor color)
 /* the menus draw a frame, then show it: 60 Hz, as the Wii video */
 void gxSetScreen(void)
 {
+  /* menus: the sound output is closed while nothing plays (wiiu_asnd.c) */
+  extern void wiiu_asnd_idle(void);
+  wiiu_asnd_idle();
   VIDEO_WaitVSync();
   LOCK();
   SDL_RenderPresent(renderer);
@@ -561,7 +566,7 @@ void gxSetScreen(void)
    width in Wii video pixels (640), yscale a quarter of the height (480) */
 static void aspect_ratio(int *xscale, int *yscale)
 {
-  *yscale = (bitmap.viewport.h + (2 * bitmap.viewport.y)) / 2;
+  *yscale = (vp.h + (2 * vp.y)) / 2;
 
   if (config.aspect)
   {
@@ -572,7 +577,7 @@ static void aspect_ratio(int *xscale, int *yscale)
 
     if ((config.overscan & 2) && !pico32x_active)
     {
-      if (reg[12] & 1)
+      if (vp.h40)
         *xscale = (system_clock == MCLOCK_NTSC) ? 350 : 354;
       else
         *xscale = (system_clock == MCLOCK_NTSC) ? 357 : 361;
@@ -585,15 +590,33 @@ static void aspect_ratio(int *xscale, int *yscale)
         *xscale = (system_clock == MCLOCK_NTSC) ? 322 : 325;
     }
 
-    /* the Wii U picture is 16:9: "ORIGINAL (16:9)" keeps a 4:3 game */
-    if (config.aspect & 2)
-      *xscale = (*xscale * 3) / 4;
+    /* the Wii U picture is always 16:9: ORIGINAL keeps the game at 4:3 */
+    *xscale = (*xscale * 3) / 4;
+
+    /* PIXEL PERFECT (the ORIGINAL 16:9 setting of the Wii): every pixel of
+       the game the same whole number of pixels of the 1280x720 screen. In
+       640x480 units, a screen pixel is 1/2 across and 2/3 down; xscale and
+       yscale are half the width and a quarter of the height. */
+    if (config.aspect == 2)
+    {
+      int w = vwidth, h = vheight, n;
+      if ((w <= 0) || (h <= 0))
+      {
+        w = vp.w + 2 * vp.x;
+        h = vp.h + 2 * vp.y;
+      }
+      n = SCREEN_W / w;
+      if (SCREEN_H / h < n) n = SCREEN_H / h;
+      if (n < 1) n = 1;
+      *xscale = (w * n) / 4;
+      *yscale = (h * n) / 6;
+    }
   }
   else
   {
-    *xscale = bitmap.viewport.w + (2 * bitmap.viewport.x);
+    *xscale = vp.w + (2 * vp.x);
 
-    if (!(reg[12] & 1) && !pico32x_active)
+    if (!(vp.h40) && !pico32x_active)
       *xscale = (*xscale * 320) / 256;
 
     if ((system_hw == SYSTEM_GG) && !config.gg_extra)
@@ -684,17 +707,83 @@ static void untile(void)
   }
 }
 
+/* the texture of the game picture: RGB565 as the bitmap if the renderer
+   takes it, else 32 bits (converted when the picture is copied) */
+static Uint32 screen_fmt;
+static u32 *screen_conv;
+
+static void screen_format(void)
+{
+  SDL_RendererInfo info;
+  Uint32 want[] = { SDL_PIXELFORMAT_RGB565, SDL_PIXELFORMAT_ARGB8888, SDL_PIXELFORMAT_ABGR8888, SDL_PIXELFORMAT_RGBA8888, SDL_PIXELFORMAT_BGRA8888 };
+  unsigned i, j;
+
+  if (screen_fmt) return;
+  screen_fmt = SDL_PIXELFORMAT_ARGB8888;
+  if (SDL_GetRendererInfo(renderer, &info) == 0)
+  {
+    wiiu_log("renderer %s, %d texture formats", info.name, (int)info.num_texture_formats);
+    for (i = 0; i < sizeof(want) / sizeof(want[0]); i++)
+    {
+      for (j = 0; j < info.num_texture_formats; j++)
+      {
+        if (info.texture_formats[j] == want[i])
+        {
+          screen_fmt = want[i];
+          wiiu_log("game texture format: %s", SDL_GetPixelFormatName(screen_fmt));
+          return;
+        }
+      }
+    }
+  }
+  wiiu_log("game texture format: no match, %s", SDL_GetPixelFormatName(screen_fmt));
+}
+
+/* the picture (RGB565, untiled) to the texture */
+static void screen_upload(void)
+{
+  int n = vwidth * vheight, i;
+
+  if (screen_fmt == SDL_PIXELFORMAT_RGB565)
+  {
+    SDL_UpdateTexture(screen_tex, NULL, untiled, vwidth * 2);
+    return;
+  }
+  if (!screen_conv)
+    screen_conv = (u32 *)malloc(720 * 576 * sizeof(u32));
+  if (!screen_conv) return;
+
+  for (i = 0; i < n; i++)
+  {
+    u32 c = untiled[i];
+    u32 r = (c >> 11) & 31, g = (c >> 5) & 63, b = c & 31;
+    r = (r << 3) | (r >> 2);
+    g = (g << 2) | (g >> 4);
+    b = (b << 3) | (b >> 2);
+    switch (screen_fmt)
+    {
+      case SDL_PIXELFORMAT_ABGR8888: screen_conv[i] = 0xff000000 | (b << 16) | (g << 8) | r; break;
+      case SDL_PIXELFORMAT_RGBA8888: screen_conv[i] = (r << 24) | (g << 16) | (b << 8) | 0xff; break;
+      case SDL_PIXELFORMAT_BGRA8888: screen_conv[i] = (b << 24) | (g << 16) | (r << 8) | 0xff; break;
+      default:                       screen_conv[i] = 0xff000000 | (r << 16) | (g << 8) | b; break;
+    }
+  }
+  SDL_UpdateTexture(screen_tex, NULL, screen_conv, vwidth * 4);
+}
+
 static void screen_texture(void)
 {
+  screen_format();
   if (screen_tex && (screen_w == vwidth) && (screen_h == vheight))
   {
     SDL_SetTextureScaleMode(screen_tex, config.bilinear ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
     return;
   }
   if (screen_tex) SDL_DestroyTexture(screen_tex);
-  screen_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, vwidth, vheight);
+  screen_tex = SDL_CreateTexture(renderer, screen_fmt, SDL_TEXTUREACCESS_STREAMING, vwidth, vheight);
   screen_w = vwidth;
   screen_h = vheight;
+  wiiu_log("game texture %dx%d: %s", vwidth, vheight, screen_tex ? "ok" : SDL_GetError());
   if (screen_tex)
   {
     SDL_SetTextureBlendMode(screen_tex, SDL_BLENDMODE_BLEND);
@@ -891,6 +980,37 @@ static int bezel_file(char *path)
   return 1;
 }
 
+/* bezel.c reads its PNGs with this (the decoder of the menu textures):
+   RGBA, 8 bits, rows one after the other, malloc'd */
+int wiiu_png_rgba(const char *path, const void *data, unsigned int size,
+                  unsigned char **pixels, int *w, int *h)
+{
+  SDL_Surface *src, *rgba;
+  int y;
+
+  *pixels = NULL;
+  src = path ? IMG_Load(path) : IMG_Load_RW(SDL_RWFromConstMem(data, (int)size), 1);
+  if (!src)
+  {
+    wiiu_log("bezel PNG: %s", IMG_GetError());
+    return 0;
+  }
+  rgba = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
+  SDL_FreeSurface(src);
+  if (!rgba) return 0;
+
+  *pixels = (unsigned char *)malloc((size_t)rgba->w * rgba->h * 4);
+  if (*pixels)
+  {
+    for (y = 0; y < rgba->h; y++)
+      memcpy(*pixels + (size_t)y * rgba->w * 4, (u8 *)rgba->pixels + y * rgba->pitch, rgba->w * 4);
+    *w = rgba->w;
+    *h = rgba->h;
+  }
+  SDL_FreeSurface(rgba);
+  return *pixels != NULL;
+}
+
 /* the bezel texture of bezel.c (GX RGBA8: 4x4 tiles of AR then GB) to SDL */
 static SDL_Texture *bezel_texture(const bezel_image *b)
 {
@@ -942,14 +1062,17 @@ static void bezel_update(void)
   snprintf(bezel_path, sizeof(bezel_path), "%s", path);
   if (bezel_tex) SDL_DestroyTexture(bezel_tex);
   bezel_tex = NULL;
+  wiiu_log("bezel load %s", path);
   ok = !strcmp(path, BEZEL_DEFAULT) ?
        bezel_load_memory(&bezel, Bezel_default_png, Bezel_default_png_size, 640, 480) :
        bezel_load(&bezel, path, 640, 480);
+  wiiu_log("bezel loaded: %d", ok);
   if (ok)
   {
     LOCK();
     bezel_tex = bezel_texture(&bezel);
     UNLOCK();
+    wiiu_log("bezel texture: %s", bezel_tex ? "ok" : SDL_GetError());
   }
 }
 
@@ -1012,6 +1135,11 @@ static void draw_game(u8 alpha)
   f32 xsize = 1.0f, ysize = 1.0f, cx, cy, dw, dh;
   int hole, cropped;
 
+  /* PIXEL PERFECT: whole numbers of screen pixels, so no Auto Crop scaling
+     and no smoothing */
+  const int perfect = (config.aspect == 2);
+  const int ac = perfect ? AUTOCROP_OFF : autocrop_mode;
+
   if (!screen_tex || !screen_ready) return;
 
   hole = bezel_tex && bezel.hole_w;
@@ -1021,17 +1149,17 @@ static void draw_game(u8 alpha)
     area.x = bezel.hole_x; area.y = bezel.hole_y;
     area.w = bezel.hole_w; area.h = bezel.hole_h;
   }
-  if (bezel_tex || (area.w < 640) || (area.h < 480) || (autocrop_mode != AUTOCROP_OFF))
+  if (bezel_tex || (area.w < 640) || (area.h < 480) || (ac != AUTOCROP_OFF))
     gxDrawRectangle(0, 0, 640, 480, 255, (GXColor)BLACK);
 
   /* visible part of the frame and its size (auto crop) */
   tex_u0 = tex_v0 = 0.0f;
   tex_u1 = tex_v1 = 1.0f;
-  if ((autocrop_mode != AUTOCROP_OFF) && (area.w > 0) && (area.h > 0))
+  if ((ac != AUTOCROP_OFF) && (area.w > 0) && (area.h > 0))
   {
     f32 xroom = hole ? 1.0f : 640.0f / area.w;
     f32 yroom = hole ? 1.0f : 480.0f / area.h;
-    autocrop_view_border(&autocrop, autocrop_mode, vwidth, vheight / crop_scale(), crop_border, xroom, yroom,
+    autocrop_view_border(&autocrop, ac, vwidth, vheight / crop_scale(), crop_border, xroom, yroom,
                          &tex_u0, &tex_u1, &tex_v0, &tex_v1, &xsize, &ysize);
   }
   cropped = !((tex_u0 == 0.0f) && (tex_u1 == 1.0f) && (tex_v0 == 0.0f) && (tex_v1 == 1.0f));
@@ -1071,8 +1199,9 @@ static void draw_game(u8 alpha)
     SDL_RenderCopy(renderer, bezel_tex, NULL, NULL); /* background */
   }
 
-  if (config.bilinear || !(cropped || bezel_tex) || !sharp_copy(&src, &dst))
+  if (perfect || config.bilinear || !(cropped || bezel_tex) || !sharp_copy(&src, &dst))
   {
+    SDL_SetTextureScaleMode(screen_tex, (config.bilinear && !perfect) ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
     SDL_SetTextureAlphaMod(screen_tex, alpha);
     SDL_RenderCopy(renderer, screen_tex, &src, &dst);
   }
@@ -1169,6 +1298,13 @@ static void draw_cd_leds(gx_texture *l, gx_texture *r)
 /* Emulation mode -> Menu mode */
 void gx_video_Stop(void)
 {
+  wiiu_home_menu(1);
+
+  /* the menus keep their own pace (VIDEO_WaitVSync) */
+  wiiu_vsync = 0;
+  LOCK();
+  SDL_RenderSetVSync(renderer, 0);
+  UNLOCK();
   if (sms_ntsc) free(sms_ntsc);
   if (md_ntsc) free(md_ntsc);
   sms_ntsc = NULL;
@@ -1190,6 +1326,8 @@ void gx_video_Stop(void)
 void gx_video_Start(void)
 {
   int i, player = 0;
+  wiiu_log("gx_video_Start");
+  wiiu_home_menu(0);
 
   gc_pal = ((config.tv_mode == 1) || ((config.tv_mode == 2) && vdp_pal)) ? 1 : 0;
 
@@ -1235,6 +1373,7 @@ void gx_video_Start(void)
     }
   }
 
+  wiiu_log("ntsc done");
   osd = config.fps;
   memset(msg, 0, sizeof(msg));
 
@@ -1275,113 +1414,151 @@ void gx_video_Start(void)
   }
 
   /* bezel of the game */
+  wiiu_log("bezel_update (%s)", config.bezel);
   bezel_update();
 
-  /* the sound sets the speed (wiiu_audio.c) */
+  wiiu_log("gx_video_Start done");
+  /* VSYNC (AUTO, ON): the picture is shown at the vertical blank of the TV,
+     without tearing, when the game runs at its rate (not a 50 Hz game on the
+     60 Hz picture of the Wii U); else the sound sets the speed */
+  wiiu_vsync = config.vsync && (gc_pal == vdp_pal);
+  LOCK();
+  SDL_RenderSetVSync(renderer, wiiu_vsync);
+  UNLOCK();
+  wiiu_log("VSYNC %s", wiiu_vsync ? "on" : "off");
   videoSync = 0;
   frameCount = 0;
   starttime = wiiu_time_us();
+}
+
+/* the picture of the frame just emulated: taken from the bitmap before the
+   next frame is emulated (on another core, see run_frames in gx/main.c),
+   then shown while that frame runs */
+static int captured;
+static u8 cap_cd_mode;
+static int cap_fps_x;
+
+void wiiu_video_capture(void)
+{
+  static int logged;
+  if (logged < 3)
+    wiiu_log("video frame %d (%dx%d)", ++logged, vwidth, vheight);
+
+  if (bitmap.viewport.changed & 1)
+  {
+    vwidth = bitmap.viewport.w + (2 * bitmap.viewport.x);
+    vheight = bitmap.viewport.h + (2 * bitmap.viewport.y);
+
+    if (config.render && interlaced)
+      vheight = vheight << 1;
+
+    if (config.ntsc && !pico32x_active)
+    {
+      vwidth = (reg[12] & 1) ? MD_NTSC_OUT_WIDTH(vwidth) : SMS_NTSC_OUT_WIDTH(vwidth);
+      vwidth = (vwidth >> 2) << 2;
+    }
+
+    if (vwidth > 720) vwidth = 720;
+    if (vheight > 576) vheight = 576;
+    bitmap.viewport.changed &= ~1;
+
+    /* new frame size: forget the current crop (learned layouts are kept) */
+    autocrop_reset_tracking(&autocrop);
+  }
+
+  /* what the drawing reads while the next frame changes it */
+  vp.w = bitmap.viewport.w;
+  vp.h = bitmap.viewport.h;
+  vp.x = bitmap.viewport.x;
+  vp.y = bitmap.viewport.y;
+  vp.h40 = reg[12] & 1;
+  cap_cd_mode = (system_hw == SYSTEM_MCD) ? scd.regs[0x06 >> 1].byte.h : 0;
+  cap_fps_x = (bitmap.viewport.x > 0) ? (24 + bitmap.viewport.x) : 24;
+
+  if ((vwidth > 0) && (vheight > 0))
+  {
+    crop_update();
+    untile();
+    captured = 1;
+  }
+
+  /* interlaced mode change */
+  if (bitmap.viewport.changed & 4)
+  {
+    if (!config.render && config.vsync && (gc_pal == vdp_pal))
+      audio_set_rate(snd.sample_rate, get_framerate());
+    bitmap.viewport.changed &= ~4;
+  }
+}
+
+void wiiu_video_present(void)
+{
+  if (captured && (vwidth > 0) && (vheight > 0))
+  {
+    LOCK();
+    set_game_view();
+    screen_texture();
+    if (screen_tex)
+      screen_upload();
+    screen_ready = 1;
+
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+    UNLOCK();
+
+    draw_game(0xff);
+
+    if (osd)
+    {
+      if (crosshair[0])
+      {
+        if ((input.system[0] == SYSTEM_LIGHTPHASER) || (input.system[0] == SYSTEM_SMASH))
+          draw_crosshair(crosshair[0], input.analog[0][0], input.analog[0][1]);
+        else
+          draw_crosshair(crosshair[0], input.analog[4][0], input.analog[4][1]);
+      }
+      if (crosshair[1])
+      {
+        if ((input.system[1] == SYSTEM_LIGHTPHASER) || (input.system[1] == SYSTEM_SMASH))
+          draw_crosshair(crosshair[1], input.analog[4][0], input.analog[4][1]);
+        else
+          draw_crosshair(crosshair[1], input.analog[5][0], input.analog[5][1]);
+      }
+
+      if (cd_leds[1][1])
+        draw_cd_leds(cd_leds[1][(cap_cd_mode >> 1) & 1], cd_leds[0][cap_cd_mode & 1]);
+
+      if (config.fps)
+      {
+        u64 now = wiiu_time_us();
+        u32 delta = (u32)(now - starttime);
+        frameCount++;
+        if (delta > 1000000)
+        {
+          sprintf(msg, "%3.2f FPS", (float)frameCount * 1000000.0 / (float)delta);
+          frameCount = 0;
+          starttime = now;
+        }
+        FONT_write(msg, 20, cap_fps_x, 40, 640, (GXColor)WHITE);
+      }
+    }
+
+    LOCK();
+    SDL_RenderPresent(renderer);
+    set_menu_view();
+    UNLOCK();
+  }
+
+  pump_events();
 }
 
 int gx_video_Update(int status)
 {
   if (status & VIDEO_UPDATE)
   {
-    if (bitmap.viewport.changed & 1)
-    {
-      vwidth = bitmap.viewport.w + (2 * bitmap.viewport.x);
-      vheight = bitmap.viewport.h + (2 * bitmap.viewport.y);
-
-      if (config.render && interlaced)
-        vheight = vheight << 1;
-
-      if (config.ntsc && !pico32x_active)
-      {
-        vwidth = (reg[12] & 1) ? MD_NTSC_OUT_WIDTH(vwidth) : SMS_NTSC_OUT_WIDTH(vwidth);
-        vwidth = (vwidth >> 2) << 2;
-      }
-
-      if (vwidth > 720) vwidth = 720;
-      if (vheight > 576) vheight = 576;
-      bitmap.viewport.changed &= ~1;
-
-      /* new frame size: forget the current crop (learned layouts are kept) */
-      autocrop_reset_tracking(&autocrop);
-    }
-
-    if ((vwidth > 0) && (vheight > 0))
-    {
-      crop_update();
-      untile();
-
-      LOCK();
-      set_game_view();
-      screen_texture();
-      if (screen_tex)
-        SDL_UpdateTexture(screen_tex, NULL, untiled, vwidth * 2);
-      screen_ready = 1;
-
-      SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-      SDL_RenderClear(renderer);
-      UNLOCK();
-
-      draw_game(0xff);
-
-      if (osd)
-      {
-        if (crosshair[0])
-        {
-          if ((input.system[0] == SYSTEM_LIGHTPHASER) || (input.system[0] == SYSTEM_SMASH))
-            draw_crosshair(crosshair[0], input.analog[0][0], input.analog[0][1]);
-          else
-            draw_crosshair(crosshair[0], input.analog[4][0], input.analog[4][1]);
-        }
-        if (crosshair[1])
-        {
-          if ((input.system[1] == SYSTEM_LIGHTPHASER) || (input.system[1] == SYSTEM_SMASH))
-            draw_crosshair(crosshair[1], input.analog[4][0], input.analog[4][1]);
-          else
-            draw_crosshair(crosshair[1], input.analog[5][0], input.analog[5][1]);
-        }
-
-        if (cd_leds[1][1])
-        {
-          u8 mode = scd.regs[0x06 >> 1].byte.h;
-          draw_cd_leds(cd_leds[1][(mode >> 1) & 1], cd_leds[0][mode & 1]);
-        }
-
-        if (config.fps)
-        {
-          u64 now = wiiu_time_us();
-          u32 delta = (u32)(now - starttime);
-          frameCount++;
-          if (delta > 1000000)
-          {
-            sprintf(msg, "%3.2f FPS", (float)frameCount * 1000000.0 / (float)delta);
-            frameCount = 0;
-            starttime = now;
-          }
-          FONT_write(msg, 20, (bitmap.viewport.x > 0) ? (24 + bitmap.viewport.x) : 24, 40, 640, (GXColor)WHITE);
-        }
-      }
-
-      LOCK();
-      SDL_RenderPresent(renderer);
-      set_menu_view();
-      UNLOCK();
-    }
-
-    pump_events();
-
-    /* interlaced mode change */
-    if (bitmap.viewport.changed & 4)
-    {
-      if (!config.render && config.vsync && (gc_pal == vdp_pal))
-        audio_set_rate(snd.sample_rate, get_framerate());
-      bitmap.viewport.changed &= ~4;
-    }
+    wiiu_video_capture();
+    wiiu_video_present();
   }
-
   return status & ~(VIDEO_WAIT | VIDEO_UPDATE);
 }
 

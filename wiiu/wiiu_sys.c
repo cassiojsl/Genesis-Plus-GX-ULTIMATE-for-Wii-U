@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <sys/iosupport.h>
 #include <sys/stat.h>
 #include <coreinit/thread.h>
@@ -18,6 +19,9 @@
 #include <coreinit/systeminfo.h>
 #include <coreinit/memdefaultheap.h>
 #include <coreinit/memory.h>
+#include <coreinit/codegen.h>
+#include <coreinit/semaphore.h>
+#include <coreinit/cache.h>
 #include <vpad/input.h>
 #include <padscore/kpad.h>
 #include <padscore/wpad.h>
@@ -25,6 +29,12 @@
 #include <SDL.h>
 
 #include "wiiu_bridge.h"
+#include <mocha/mocha.h>
+#include <mocha/disc_interface.h>
+
+/* libfat (wiiu/libs), its fat.h is the libogc one for the Wii code */
+extern bool fatMount(const char *name, const DISC_INTERFACE *interface, uint32_t startSector, uint32_t cacheSize, uint32_t SectorsPerPage);
+extern void fatUnmount(const char *name);
 
 /****************************************************************************
  * Controllers
@@ -54,9 +64,37 @@ void wiiu_input_init(void)
   WPADEnableURCC(TRUE);      /* Wii U Pro Controller */
   WPADEnableWiiRemote(TRUE);
 
-  /* HOME goes to the menu of the emulator, as on the Wii (its Exit
-     option goes back to the Wii U Menu) */
+  /* HOME goes to the menu of the emulator, as on the Wii; in that menu,
+     HOME opens the HOME Menu of the Wii U (wiiu_home_menu) */
   OSEnableHomeButtonMenu(FALSE);
+}
+
+/****************************************************************************
+ * HOME Menu of the Wii U: allowed in the menus of the emulator (once HOME
+ * is released, so the press that opened the menu does not open it too),
+ * never while a game runs. While it is allowed, the system takes HOME: the
+ * menus do not see it.
+ ****************************************************************************/
+
+static int home_wanted = 1, home_enabled, home_held;
+
+void wiiu_home_menu(int allowed)
+{
+  home_wanted = allowed;
+  if (!allowed && home_enabled)
+  {
+    OSEnableHomeButtonMenu(FALSE);
+    home_enabled = 0;
+  }
+}
+
+static void home_update(void)
+{
+  if (home_wanted && !home_enabled && !home_held)
+  {
+    OSEnableHomeButtonMenu(TRUE);
+    home_enabled = 1;
+  }
 }
 
 static uint32_t core_buttons(uint32_t h)
@@ -76,9 +114,14 @@ static uint32_t core_buttons(uint32_t h)
   return b;
 }
 
+#define HOME_BITS (OGC_BUTTON_HOME | (WPAD_CLASSIC_BUTTON_HOME << 16) | (WPAD_PRO_BUTTON_HOME << 16))
+
+static int wpad_home;
+
 void wiiu_wpad_scan(void)
 {
   int chan;
+  wpad_home = 0;
   for (chan = 0; chan < 4; chan++)
   {
     KPADStatus s;
@@ -138,6 +181,12 @@ void wiiu_wpad_scan(void)
         break;
     }
 
+    if (w->held & HOME_BITS)
+    {
+      wpad_home = 1;
+      if (home_enabled) w->held &= ~HOME_BITS;
+    }
+
     /* pointer (Wii Remote only), -1..1 to 0..1 */
     if ((w->ext == WIIU_EXT_NONE || w->ext == WIIU_EXT_NUNCHUK) && (s.posValid > 0))
     {
@@ -164,6 +213,9 @@ void wiiu_drc_scan(void)
 
   drc.connected = 1;
   drc.held = s.hold & 0xffff;
+  home_held = wpad_home || (drc.held & VPAD_BUTTON_HOME);
+  home_update();
+  if (home_enabled) drc.held &= ~VPAD_BUTTON_HOME;
   drc.extra = 0;
   if (s.hold & VPAD_BUTTON_STICK_L) drc.extra |= 0x80;
   if (s.hold & VPAD_BUTTON_STICK_R) drc.extra |= 0x40;
@@ -210,8 +262,8 @@ void wiiu_sleep_us(uint32_t us)
 }
 
 /****************************************************************************
- * "sd:" device: the paths of the Wii code (sd:/genplusultimate/...) on the
- * SD card of the Wii U (fs:/vol/external01/genplusultimate/...)
+ * "sd:" device: the paths of the Wii code (sd:/wiiu/apps/genplusultimate/...)
+ * on the SD card of the Wii U (fs:/vol/external01/wiiu/apps/genplusultimate/...)
  ****************************************************************************/
 
 #define SD_ROOT "fs:/vol/external01"
@@ -417,6 +469,7 @@ int wiiu_system_font(const void **data, uint32_t *size)
 
 void wiiu_exit(void)
 {
+  wiiu_usb_unmount();
   SYSLaunchMenu();
   for (;;)
   {
@@ -431,4 +484,346 @@ void wiiu_exit(void)
     }
     SDL_Delay(10);
   }
+}
+
+/****************************************************************************
+ * Codegen (JIT) area: only the core given by OSGetCodegenCore() may switch it
+ * between writable and executable, so the test runs in a thread on that core.
+ ****************************************************************************/
+
+static int jit_thread(int argc, void *argv)
+{
+  wiiu_jit_state *s = (wiiu_jit_state *)argv;
+  uint32_t *code = (uint32_t *)s->addr;
+  (void)argc;
+
+  if (!OSSwitchSecCodeGenMode(CODEGEN_RW_))
+    return 0;
+
+  if (s->exec_tested)
+  {
+    code[0] = 0x3860002A;   /* li  r3,42 */
+    code[1] = 0x4E800020;   /* blr       */
+    DCFlushRange(code, 8);
+  }
+
+  if (!OSSwitchSecCodeGenMode(CODEGEN_R_X))
+    return 0;
+  s->switch_ok = 1;
+
+  if (s->exec_tested)
+  {
+    int (*fn)(void) = (int (*)(void))code;
+    ICInvalidateRange(code, 8);
+    s->exec_ok = (fn() == 42);
+  }
+  return 0;
+}
+
+void wiiu_jit_probe(int exec, wiiu_jit_state *state)
+{
+  static OSThread thread __attribute__((aligned(16)));
+  void *addr = NULL;
+  uint32_t size = 0;
+  uint8_t *stack;
+  OSThreadAttributes affinity;
+  int ret;
+
+  memset(state, 0, sizeof(*state));
+  OSGetCodegenVirtAddrRange(&addr, &size);
+  state->core = (int)OSGetCodegenCore();
+  if (!addr || (size < 8))
+    return;
+  state->addr = (uint32_t)addr;
+  state->size = size;
+
+  switch (state->core)
+  {
+    case 0:  affinity = OS_THREAD_ATTRIB_AFFINITY_CPU0; break;
+    case 1:  affinity = OS_THREAD_ATTRIB_AFFINITY_CPU1; break;
+    case 2:  affinity = OS_THREAD_ATTRIB_AFFINITY_CPU2; break;
+    default: return;
+  }
+
+  stack = (uint8_t *)MEMAllocFromDefaultHeapEx(THREAD_STACK, 16);
+  if (!stack)
+    return;
+  state->exec_tested = exec;
+  if (OSCreateThread(&thread, jit_thread, 0, state, stack + THREAD_STACK, THREAD_STACK, 16, affinity))
+  {
+    OSResumeThread(&thread);
+    OSJoinThread(&thread, &ret);
+  }
+  MEMFreeToDefaultHeap(stack);
+}
+
+/****************************************************************************
+ * Debug log (built with -DWIIU_DEBUG_LOG only)
+ ****************************************************************************/
+
+void wiiu_log(const char *fmt, ...)
+{
+#ifdef WIIU_DEBUG_LOG
+  static int started;
+  char line[256];
+  va_list ap;
+  FILE *f;
+  int n;
+
+  n = snprintf(line, sizeof(line), "[%8llu] ", (unsigned long long)(wiiu_time_us() / 1000));
+  va_start(ap, fmt);
+  vsnprintf(line + n, sizeof(line) - n, fmt, ap);
+  va_end(ap);
+
+  f = fopen("sd:/wiiu/apps/genplusultimate/log.txt", started ? "a" : "w");
+  if (!f) return;
+  started = 1;
+  fprintf(f, "%s\n", line);
+  fclose(f);
+#else
+  (void)fmt;
+#endif
+}
+
+/****************************************************************************
+ * "usb:" device: a FAT32 USB drive, read through libmocha (the Mocha payload
+ * of Aroma) and libfat
+ ****************************************************************************/
+
+static int usb_state; /* 0: not tried, 1: mounted, -1: Mocha missing */
+
+int wiiu_usb_mount(void)
+{
+  MochaUtilsStatus st;
+
+  if (usb_state == 1)
+    return 1;
+  if (usb_state == 0)
+  {
+    st = Mocha_InitLibrary();
+    if (st != MOCHA_RESULT_SUCCESS)
+    {
+      wiiu_log("USB: Mocha_InitLibrary failed (%d)", (int)st);
+      usb_state = -1;
+      return 0;
+    }
+    usb_state = 2; /* Mocha ready, no drive yet */
+  }
+  if (usb_state < 0)
+    return 0;
+
+  if (fatMount("usb", &Mocha_usb_disc_interface, 0, 32, 64))
+  {
+    wiiu_log("USB: drive mounted as usb:");
+    usb_state = 1;
+    return 1;
+  }
+  wiiu_log("USB: no FAT32 drive");
+  return 0;
+}
+
+void wiiu_usb_unmount(void)
+{
+  if (usb_state == 1)
+  {
+    fatUnmount("usb:");
+    usb_state = 2;
+  }
+  if (usb_state == 2)
+  {
+    Mocha_DeInitLibrary();
+    usb_state = 0;
+  }
+}
+
+/****************************************************************************
+ * SH-2 recompiler of PicoDrive (32X): its code goes into the codegen area,
+ * which is either writable or executable, and only from one core
+ * (OSGetCodegenCore). PicoDrive runs on that core (wiiu_jit_call) and makes
+ * the area writable around what writes code (wiiu_jit_write, DRC_WR_* in
+ * picodrive/cpu/drc/cmn.h).
+ ****************************************************************************/
+
+static wiiu_jit_state jit;
+static int jit_checked, jit_depth;
+void wiiu_jit_write(int on);
+
+int wiiu_jit_available(void)
+{
+  if (!jit_checked)
+  {
+    jit_checked = 1;
+    wiiu_jit_probe(1, &jit);
+    wiiu_log("JIT area: %u KB at %08x, core %d, switch %d, run %d", (unsigned)(jit.size / 1024),
+             (unsigned)jit.addr, jit.core, jit.switch_ok, jit.exec_ok);
+  }
+  /* PicoDrive needs 4 MB (DRC_TCACHE_SIZE); its calls to the C code of the
+     app load the whole address (emith_abicall), so the area can be anywhere */
+  return jit.exec_ok && (jit.size >= 4 * 1024 * 1024);
+}
+
+void *wiiu_jit_area(size_t size)
+{
+  if (!wiiu_jit_available() || (size > jit.size))
+    return NULL;
+  return (void *)jit.addr;
+}
+
+void wiiu_jit_write(int on)
+{
+  if (on)
+  {
+    if (jit_depth++ == 0)
+      OSSwitchSecCodeGenMode(CODEGEN_RW_);
+  }
+  else if (jit_depth > 0)
+  {
+    if (--jit_depth == 0)
+      OSSwitchSecCodeGenMode(CODEGEN_R_X);
+  }
+}
+
+/* a thread on the codegen core runs PicoDrive for the main thread */
+static OSThread jit_thread_obj __attribute__((aligned(16)));
+static uint8_t *jit_stack;
+static OSSemaphore jit_go, jit_done;
+static void (*volatile jit_fn)(void *);
+static void *volatile jit_arg;
+static int jit_thread_on;
+
+static int jit_worker(int argc, void *argv)
+{
+  (void)argc; (void)argv;
+  for (;;)
+  {
+    OSWaitSemaphore(&jit_go);
+    jit_fn(jit_arg);
+    OSSignalSemaphore(&jit_done);
+  }
+  return 0;
+}
+
+#define JIT_STACK (512 * 1024)
+
+void wiiu_jit_call(void (*fn)(void *), void *arg)
+{
+  OSThreadAttributes affinity;
+
+  if (!wiiu_jit_available() || ((int)OSGetCoreId() == jit.core))
+  {
+    fn(arg);
+    return;
+  }
+
+  if (!jit_thread_on)
+  {
+    switch (jit.core)
+    {
+      case 0:  affinity = OS_THREAD_ATTRIB_AFFINITY_CPU0; break;
+      case 1:  affinity = OS_THREAD_ATTRIB_AFFINITY_CPU1; break;
+      default: affinity = OS_THREAD_ATTRIB_AFFINITY_CPU2; break;
+    }
+    jit_stack = (uint8_t *)MEMAllocFromDefaultHeapEx(JIT_STACK, 16);
+    OSInitSemaphore(&jit_go, 0);
+    OSInitSemaphore(&jit_done, 0);
+    if (!jit_stack || !OSCreateThread(&jit_thread_obj, jit_worker, 0, NULL,
+                                      jit_stack + JIT_STACK, JIT_STACK, 16, affinity))
+    {
+      wiiu_log("JIT: no thread on core %d", jit.core);
+      fn(arg);
+      return;
+    }
+    OSResumeThread(&jit_thread_obj);
+    jit_thread_on = 1;
+    wiiu_log("JIT: PicoDrive runs on core %d", jit.core);
+  }
+
+  jit_fn = fn;
+  jit_arg = arg;
+  OSSignalSemaphore(&jit_go);
+  OSWaitSemaphore(&jit_done);
+}
+
+/****************************************************************************
+ * Emulation on another core (run_frames in gx/main.c): the frames run in a
+ * thread on a core other than the one of the main thread (the GPU, SDL), on
+ * the codegen core when there is one (the 32X recompiler), while the main
+ * thread shows the frame before.
+ ****************************************************************************/
+
+static OSThread emu_thread_obj __attribute__((aligned(16)));
+static uint8_t *emu_stack;
+static OSSemaphore emu_go, emu_done;
+static int (*volatile emu_fn)(void);
+static volatile int emu_result;
+static int emu_state; /* 0: not made, 1: running, -1: none (frames run here) */
+
+static int emu_worker(int argc, void *argv)
+{
+  (void)argc; (void)argv;
+  for (;;)
+  {
+    OSWaitSemaphore(&emu_go);
+    emu_result = emu_fn();
+    OSSignalSemaphore(&emu_done);
+  }
+  return 0;
+}
+
+#define EMU_STACK (1024 * 1024)
+
+void wiiu_emu_start(int (*frame)(void))
+{
+  if (emu_state == 0)
+  {
+    int main_core = (int)OSGetCoreId(), core;
+    OSThreadAttributes affinity;
+
+    if (wiiu_jit_available() && (jit.core != main_core))
+      core = jit.core;
+    else
+      core = (main_core == 2) ? 1 : 2;
+    affinity = (core == 0) ? OS_THREAD_ATTRIB_AFFINITY_CPU0 :
+               (core == 1) ? OS_THREAD_ATTRIB_AFFINITY_CPU1 : OS_THREAD_ATTRIB_AFFINITY_CPU2;
+
+    emu_state = -1;
+    emu_stack = (uint8_t *)MEMAllocFromDefaultHeapEx(EMU_STACK, 16);
+    OSInitSemaphore(&emu_go, 0);
+    OSInitSemaphore(&emu_done, 0);
+    if (emu_stack && OSCreateThread(&emu_thread_obj, emu_worker, 0, NULL,
+                                    emu_stack + EMU_STACK, EMU_STACK, 16, affinity))
+    {
+      OSResumeThread(&emu_thread_obj);
+      emu_state = 1;
+    }
+    wiiu_log("emulation on core %d (main thread on core %d)%s", core, main_core,
+             (emu_state == 1) ? "" : ": no thread, on the main core");
+  }
+
+  if (emu_state < 0)
+  {
+    emu_result = frame();
+    return;
+  }
+  emu_fn = frame;
+  OSSignalSemaphore(&emu_go);
+}
+
+int wiiu_emu_wait(void)
+{
+  if (emu_state == 1)
+    OSWaitSemaphore(&emu_done);
+  return emu_result;
+}
+
+/* why the recompiler cannot be used, for the 32X menu */
+void wiiu_jit_why(char *text, int size)
+{
+  wiiu_jit_available();
+  if (!jit.size)
+    snprintf(text, size, "No JIT area for the app (core %d)", jit.core);
+  else if (!jit.exec_ok)
+    snprintf(text, size, "JIT area does not run code (%u KB)", (unsigned)(jit.size / 1024));
+  else
+    snprintf(text, size, "JIT area too small: %u KB of 4096", (unsigned)(jit.size / 1024));
 }

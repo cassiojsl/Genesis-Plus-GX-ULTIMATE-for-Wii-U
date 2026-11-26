@@ -495,9 +495,10 @@ void *plat_mem_get_for_drc(size_t size)
 #if defined VITA
    sceKernelGetMemBlockBase(sceBlock, &mem);
 #elif defined HW_WUP
-   // For WiiU, a slice of RWX memory left from the exploit is used, see:
-   // https://github.com/embercold/pcsx_rearmed/commit/af0453223
-   mem = (void *)(0x01000000 - size);
+   // Wii U (Aroma): the codegen area of the system, when the app has it
+   // (wiiu_sys.c of the gx port); NULL: the DRC must stay off
+   extern void *wiiu_jit_area(size_t size);
+   mem = wiiu_jit_area(size);
 #elif defined __PS3__
    ps3mapi_process_page_allocate(sysProcessGetPid(), size, PAGE_SIZE_AUTO, 0x2F, 1, page_table);
    mem = (void *)page_table[0];
@@ -534,6 +535,10 @@ int plat_mem_set_exec(void *ptr, size_t size)
 
 #elif defined(VITA)
    ret = sceKernelOpenVMDomain();
+#elif defined(HW_WUP)
+   // the codegen area is switched between writable and executable instead
+   (void)ptr; (void)size;
+   ret = 0;
 #else
    ret = mprotect(ptr, size, PROT_READ | PROT_WRITE | PROT_EXEC);
    if (ret != 0 && log_cb)

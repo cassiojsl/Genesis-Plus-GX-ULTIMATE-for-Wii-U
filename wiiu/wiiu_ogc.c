@@ -305,12 +305,14 @@ s32 IOS_GetVersion(void) { return 58; }
 s32 IOS_ReloadIOS(int version) { (void)version; return 0; }
 
 /****************************************************************************
- * Storage: the SD card as "sd:", no DVD drive, no USB storage yet
+ * Storage: the SD card as "sd:", a FAT32 USB drive as "usb:", no DVD drive
  ****************************************************************************/
 
 bool fatInitDefault(void)
 {
-  return wiiu_sd_mount();
+  int sd = wiiu_sd_mount();
+  wiiu_usb_mount();
+  return sd;
 }
 
 static bool disc_false(void) { return false; }

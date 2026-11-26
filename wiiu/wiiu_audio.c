@@ -73,10 +73,7 @@ static int bufferSize;
 static const char *music_dirs[] =
 {
   MENU_MUSIC_FOLDER,
-#ifdef HW_RVL
-  "sd:" MENU_MUSIC_FOLDER,
-  "usb:" MENU_MUSIC_FOLDER,
-#endif
+  "sd:" MENU_MUSIC_FOLDER   /* Wii U: the USB drive is only for the games */
 };
 #define MUSIC_DIRS ((int)(sizeof(music_dirs) / sizeof(music_dirs[0])))
 #define MENU_MUSIC_MAX_SIZE (16 * 1024 * 1024)
@@ -416,8 +413,31 @@ int gx_audio_Update(int status)
   {
     if (audioSync)
     {
-      while (wiiu_stream_queued() > QUEUE_FRAMES)
+      /* if the sound stops being played (nothing leaves the queue for a
+         second) the game goes on without waiting for it. With VSYNC the
+         picture sets the speed: the sound only keeps the queue from
+         growing. */
+      extern int wiiu_vsync;
+      u32 limit = wiiu_vsync ? (QUEUE_FRAMES * 2) : QUEUE_FRAMES;
+      int waited = 0;
+      u32 last = wiiu_stream_queued();
+      while (wiiu_stream_queued() > limit)
+      {
         wiiu_sleep_us(1000);
+        if (wiiu_stream_queued() != last)
+        {
+          last = wiiu_stream_queued();
+          waited = 0;
+        }
+        else if (++waited > 1000)
+        {
+          wiiu_log("sound queue stuck at %u frames: not waiting", (unsigned)last);
+          wiiu_stream_stop();
+          wiiu_stream_start();
+          audioSync = 0;
+          break;
+        }
+      }
     }
     status &= ~AUDIO_WAIT;
   }
@@ -450,6 +470,7 @@ int gx_audio_Queued(void)
  ***/
 void gx_audio_Start(void)
 {
+  wiiu_log("gx_audio_Start");
   /* shutdown background music */
   PauseOgg(1);
   StopOgg();

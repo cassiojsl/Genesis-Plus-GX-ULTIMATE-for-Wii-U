@@ -148,6 +148,54 @@ static void init_machine(void)
   }
 }
 
+#ifdef HW_WUP
+/* Wii U: each frame is emulated on another core (wiiu_emu_*, wiiu_sys.c)
+   while the one before is drawn and shown by this one (the GPU belongs to
+   this core). The picture and the sound of a frame are taken before the
+   next frame starts. */
+extern void wiiu_emu_start(int (*frame)(void));
+extern int wiiu_emu_wait(void);
+extern void wiiu_video_capture(void);
+extern void wiiu_video_present(void);
+
+static int frame_gen(void) { system_frame_gen(0); return 1; }
+static int frame_scd(void) { system_frame_scd(0); return 1; }
+static int frame_sms(void) { system_frame_sms(0); return 1; }
+static int frame_32x(void) { return pico32x_frame(); }
+
+static void run_frames(int (*frame)(void), int is_32x)
+{
+  int drawn;
+
+  /* no game yet, or straight back to the menu (as the loops of the Wii) */
+  if (ConfigRequested)
+    return;
+
+  wiiu_emu_start(frame);
+  drawn = wiiu_emu_wait();
+
+  while (1)
+  {
+    /* this frame: its picture and its sound */
+    if (drawn)
+      wiiu_video_capture();
+    gx_audio_Update(AUDIO_UPDATE);
+    if (is_32x)
+      pico32x_frame_end();
+
+    if (ConfigRequested)
+      break;
+
+    /* the next frame on the other core, this one shown meanwhile */
+    wiiu_emu_start(frame);
+    if (drawn)
+      wiiu_video_present();
+    gx_audio_Update(AUDIO_WAIT);
+    drawn = wiiu_emu_wait();
+  }
+}
+#endif
+
 static void run_emulation(void)
 {
   u32 sync;
@@ -155,6 +203,16 @@ static void run_emulation(void)
   /* main emulation loop */
   while (1)
   {
+#ifdef HW_WUP
+    if (pico32x_active)
+      run_frames(frame_32x, 1);
+    else if (system_hw == SYSTEM_MCD)
+      run_frames(frame_scd, 0);
+    else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
+      run_frames(frame_gen, 0);
+    else
+      run_frames(frame_sms, 0);
+#else
     /* emulated system */
     if (pico32x_active)
     {
@@ -250,6 +308,8 @@ static void run_emulation(void)
         }
       }
     }
+
+#endif
 
     /* stop video & audio */
     gx_audio_Stop();

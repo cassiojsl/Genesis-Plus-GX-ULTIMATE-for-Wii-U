@@ -3,6 +3,17 @@
 
 extern u8 *tcache;
 
+#ifdef HW_WUP
+// Wii U: the code area (codegen) is either writable or executable; the
+// app switches it around everything that writes code (gx port, wiiu_sys.c)
+void wiiu_jit_write(int on);
+#define DRC_WR_BEGIN() wiiu_jit_write(1)
+#define DRC_WR_END()   wiiu_jit_write(0)
+#else
+#define DRC_WR_BEGIN()
+#define DRC_WR_END()
+#endif
+
 void drc_cmn_init(void);
 void drc_cmn_cleanup(void);
 

@@ -41,7 +41,12 @@
 #include "pico32x.h"
 #include "fileio.h"
 
+#ifdef HW_WUP
+/* Wii U: next to the app, in the apps folder of Aroma */
+#define DEFAULT_PATH  "/wiiu/apps/genplusultimate"
+#else
 #define DEFAULT_PATH  "/genplusultimate"
+#endif
 
 /*************************************************/
 /* required by Genesis Plus GX core              */

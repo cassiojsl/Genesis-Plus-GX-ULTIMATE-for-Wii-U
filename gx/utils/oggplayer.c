@@ -303,6 +303,18 @@ static void ogg_add_callback(int voice)
   }
 }
 
+#ifdef HW_WUP
+/* Wii U: the player state is shared with the voice callback, which runs in
+   the mixer of the sound on another core: both change it under the lock of
+   the mixer (wiiu/wiiu_asnd.c), the decoding itself is done outside it */
+extern void wiiu_asnd_lock(int on);
+#define OGG_LOCK()   wiiu_asnd_lock(1)
+#define OGG_UNLOCK() wiiu_asnd_lock(0)
+#else
+#define OGG_LOCK()
+#define OGG_UNLOCK()
+#endif
+
 static void * ogg_player_thread(private_data_ogg * priv)
 {
   int first_time = 1;
@@ -328,17 +340,21 @@ static void * ogg_player_thread(private_data_ogg * priv)
     if (priv[0].flag)
       LWP_ThreadSleep(oggplayer_queue); /* wait only when i have samples to send */
 
+    OGG_LOCK();
+
     if (priv[0].flag == 0) /* wait to all samples are sended */
     {
       if (ASND_TestPointer(0, priv[0].pcmout[priv[0].pcmout_pos])
           && ASND_StatusVoice(0) != SND_UNUSED)
       {
         priv[0].flag |= 64;
+        OGG_UNLOCK();
         continue;
       }
       if (priv[0].pcm_indx < READ_SAMPLES)
       {
         priv[0].flag = 3;
+        OGG_UNLOCK();
 
         if (priv[0].seek_time >= 0)
         {
@@ -351,6 +367,10 @@ static void * ogg_player_thread(private_data_ogg * priv)
                 &priv[0].vf,
                 (void *) &priv[0].pcmout[priv[0].pcmout_pos][priv[0].pcm_indx],
                 MAX_PCMOUT,/*0,2,1,*/&priv[0].current_section);
+        OGG_LOCK();
+#ifdef HW_WUP
+        __sync_synchronize(); /* the samples first, then the count (the sound is played on another core) */
+#endif
         priv[0].flag &= 192;
         if (ret == 0)
         {
@@ -410,6 +430,7 @@ static void * ogg_player_thread(private_data_ogg * priv)
         }
       }
     }
+    OGG_UNLOCK();
     usleep(10);
   }
   ov_clear(&priv[0].vf);

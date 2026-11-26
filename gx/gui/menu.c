@@ -79,6 +79,9 @@
 #define EXIT_TO_LOADER() exit(0)
 #endif
 #include <ogc/lwp_watchdog.h>
+#ifdef HW_WUP
+#include "wiiu_bridge.h"
+#endif
 
 /* Credits */
 #include "Bg_credits_png.h"
@@ -495,7 +498,7 @@ static gui_item items_prefs[] =
   {NULL,NULL,"Saves Device: FAT",       "Configure default device for Save files",         56,132,276,48},
   {NULL,NULL,"SFX Volume: 100",         "Adjust sound effects volume",                     56,132,276,48},
   {NULL,NULL,"BGM Volume: 100",         "Adjust background music volume",                  56,132,276,48},
-  {NULL,NULL,"Menu Music: RANDOM",      "Music of the menu, from /genplusultimate/music",  56,132,276,48},
+  {NULL,NULL,"Menu Music: RANDOM",      "Music of the menu, from " DEFAULT_PATH "/music",  56,132,276,48},
   {NULL,NULL,"BG Overlay: ON",          "Enable/Disable background overlay",               56,132,276,48},
   {NULL,NULL,"Screen Width: 658",       "Adjust menu screen width in pixels",              56,132,276,48},
   {NULL,NULL,"Show CD Leds: OFF",       "Enable/Disable CD leds display",                  56,132,276,48},
@@ -807,11 +810,11 @@ static void menu_music_comment(gui_item *item, int count)
 {
   if (!count)
   {
-    sprintf (item->comment, "No .ogg file in /genplusultimate/music");
+    sprintf (item->comment, "No .ogg file in " DEFAULT_PATH "/music");
   }
   else
   {
-    sprintf (item->comment, "%d song%s in /genplusultimate/music", count, (count > 1) ? "s" : "");
+    sprintf (item->comment, "%d song%s in " DEFAULT_PATH "/music", count, (count > 1) ? "s" : "");
   }
 }
 
@@ -855,11 +858,11 @@ static void prefmenu ()
   else if (config.s_auto == 1) sprintf (items[2].text, "Auto Saves: SRAM ONLY");
   else sprintf (items[2].text, "Auto Saves: NONE");
 #ifdef HW_WUP
-  /* Wii U: the SD card only (no DVD drive, no memory cards, USB drives are
-     not read yet) */
-  config.l_device = TYPE_SD;
+  /* Wii U: games on the SD card or a FAT32 USB drive, saves on the SD card
+     (no DVD drive, no memory cards) */
+  if (config.l_device != TYPE_USB) config.l_device = TYPE_SD;
   config.s_device = 0;
-  sprintf (items[3].text, "ROM Load Device: SD");
+  sprintf (items[3].text, "ROM Load Device: %s", (config.l_device == TYPE_USB) ? "USB" : "SD");
   sprintf (items[4].text, "Saves Device: SD");
 #else
 #ifdef HW_RVL
@@ -935,6 +938,10 @@ static void prefmenu ()
 
       case 3:   /*** Default ROM device ***/
 #ifdef HW_WUP
+        config.l_device = (config.l_device == TYPE_USB) ? TYPE_SD : TYPE_USB;
+        if ((config.l_device == TYPE_USB) && !wiiu_usb_mount())
+          GUI_WaitPrompt("USB", "No FAT32 USB drive found");
+        sprintf (items[3].text, "ROM Load Device: %s", (config.l_device == TYPE_USB) ? "USB" : "SD");
         break;
 #endif
 #ifdef HW_RVL
@@ -1498,11 +1505,33 @@ static const uint16 vc_table[4][2] =
  * 32X settings: PicoDrive's options (config.p32x_*, also per game), the
  * same as in its libretro core and its own menu
  ****************************************************************************/
+#ifdef HW_WUP
+/* the SH-2 recompiler needs the codegen (JIT) area of the system: without
+   it the option stays OFF */
+static void pico32x_drc_label(gui_item *item)
+{
+  if (wiiu_jit_available())
+  {
+    sprintf(item->text, "Dynamic Recompiler: %s", config.p32x_drc ? "ON" : "OFF");
+    strcpy(item->comment, "Experimental on the Wii U: much faster");
+  }
+  else
+  {
+    strcpy(item->text, "Dynamic Recompiler: N/A");
+    wiiu_jit_why(item->comment, sizeof(item->comment));
+  }
+}
+#endif
+
 static void pico32x_labels(gui_item *items)
 {
   static const char *renderer[] = { "GOOD", "ACCURATE", "FAST" };
 
+#ifdef HW_WUP
+  pico32x_drc_label(&items[0]);
+#else
   sprintf(items[0].text, "Dynamic Recompiler: %s", config.p32x_drc ? "ON" : "OFF");
+#endif
   sprintf(items[1].text, "Renderer: %s", renderer[(config.p32x_renderer < 3) ? config.p32x_renderer : 0]);
   if (config.p32x_frameskip == PICO32X_FRAMESKIP_OFF)
     sprintf(items[2].text, "Frame Skip: OFF");
@@ -1544,7 +1573,13 @@ static void pico32xmenu(void)
     switch (ret)
     {
       case 0:
+#ifdef HW_WUP
+        if (wiiu_jit_available())
+          config.p32x_drc ^= 1;
+        pico32x_drc_label(&items[0]);
+#else
         config.p32x_drc ^= 1;
+#endif
         break;
 
       case 1:
@@ -2231,7 +2266,7 @@ static void bezel_text(gui_item *item)
   {
     bezel_display_name(config.bezel, name, 20);
     sprintf (item->text, "Bezel: %s", name);
-    strcpy (item->comment, "From /genplusultimate/bezels (480i/480p)");
+    strcpy (item->comment, "From " DEFAULT_PATH "/bezels (480i/480p)");
   }
 }
 
@@ -2364,7 +2399,11 @@ static void videomenu ()
   if (config.aspect == 1)
     sprintf (items[VI_OFFSET+4+ntsc_offset].text,"Aspect: ORIGINAL (4:3)");
   else if (config.aspect == 2)
+#ifdef HW_WUP
+    sprintf (items[VI_OFFSET+4+ntsc_offset].text, "Aspect: PIXEL PERFECT");
+#else
     sprintf (items[VI_OFFSET+4+ntsc_offset].text, "Aspect: ORIGINAL (16:9)");
+#endif
   else
   {
     sprintf (items[VI_OFFSET+4+ntsc_offset].text, "Aspect: SCALED");
@@ -2655,7 +2694,11 @@ static void videomenu ()
         if (config.aspect == 1)
           sprintf (items[VI_OFFSET+ntsc_offset+4].text,"Aspect: ORIGINAL (4:3)");
         else if (config.aspect == 2)
+#ifdef HW_WUP
+          sprintf (items[VI_OFFSET+ntsc_offset+4].text, "Aspect: PIXEL PERFECT");
+#else
           sprintf (items[VI_OFFSET+ntsc_offset+4].text, "Aspect: ORIGINAL (16:9)");
+#endif
         else
           sprintf (items[VI_OFFSET+ntsc_offset+4].text, "Aspect: SCALED");
 
@@ -3949,7 +3992,9 @@ static int savemenu(void)
           {
             /* set menu background */
             bg_saves[0].w = bg_saves[0].texture->width * 2;
+#ifndef HW_WUP
             if (config.aspect & 2) bg_saves[0].w = (bg_saves[0].w * 3) / 4;
+#endif
             bg_saves[0].h = bg_saves[0].texture->height * 2;
             bg_saves[0].x = (vmode->fbWidth - bg_saves[0].w) / 2;
             bg_saves[0].y = (vmode->efbHeight - bg_saves[0].h) / 2;

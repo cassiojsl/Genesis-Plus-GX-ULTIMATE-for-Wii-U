@@ -30,7 +30,10 @@ include $(DEVKITPRO)/wut/share/wut_rules
 APP_NAME	:=	Genesis Plus GX ULTIMATE
 APP_SHORTNAME	:=	GenPlusGX
 APP_AUTHOR	:=	Eke-Eke / VrepliroidV
-ICON		:=	$(TOPDIR)/gx/hbc/icon.png
+# icon (128x128) and splash screens of the Wii U Menu / launch (wuhbtool)
+APP_ICON	:=	$(TOPDIR)/wiiu/meta/icon.png
+APP_TV_SPLASH	:=	$(TOPDIR)/wiiu/meta/splash_tv.png
+APP_DRC_SPLASH	:=	$(TOPDIR)/wiiu/meta/splash_drc.png
 
 CHDLIBDIR	:=	core/cd_hw/libchdr
 
@@ -39,7 +42,7 @@ BUILD		:=	build_wiiu
 SOURCES		:=	core core/m68k core/z80 core/sound core/sound/tremor core/ntsc core/input_hw core/cd_hw core/cart_hw core/cart_hw/svp \
 			$(CHDLIBDIR)/src $(CHDLIBDIR)/deps/lzma-24.05/src $(CHDLIBDIR)/deps/zstd-1.5.6/lib/common $(CHDLIBDIR)/deps/zstd-1.5.6/lib/decompress \
 			wiiu/images gx gx/utils gx/gui gx/fileio gx/images gx/sounds wiiu wiiu/fonts
-INCLUDES	:=	core core/m68k core/z80 core/sound core/sound/minimp3 core/sound/tremor core/ntsc core/input_hw core/cd_hw core/cart_hw core/cart_hw/svp \
+INCLUDES	:=	core wiiu/libs/libmocha/include core/m68k core/z80 core/sound core/sound/minimp3 core/sound/tremor core/ntsc core/input_hw core/cd_hw core/cart_hw core/cart_hw/svp \
 			$(CHDLIBDIR)/include $(CHDLIBDIR)/deps/lzma-24.05/include $(CHDLIBDIR)/deps/zstd-1.5.6/lib $(CHDLIBDIR)/deps/zstd-1.5.6/lib/common \
 			gx gx/utils gx/utils/wiidrc gx/gui gx/fileio gx/images gx/sounds wiiu
 
@@ -62,8 +65,10 @@ LDFLAGS		=	-g $(MACHDEP) $(RPXSPECS) -Wl,-Map,$(notdir $*.map)
 
 # SDL2 + SDL2_ttf + SDL2_image from the devkitPro portlibs
 PKGCONF		:=	$(DEVKITPRO)/portlibs/wiiu/bin/powerpc-eabi-pkg-config
-LIBS		:=	$(shell $(PKGCONF) --libs SDL2_ttf SDL2_image sdl2 2>/dev/null) -lwut -lz -lm
+# libwiiuusb: USB drives (libfat + libmocha, wiiu/libs)
+LIBS		:=	-lwiiuusb $(shell $(PKGCONF) --libs SDL2_ttf SDL2_image sdl2 2>/dev/null) -lwut -lstdc++ -lz -lm
 LIBDIRS		:=	$(PORTLIBS) $(WUT_ROOT)
+LIBDIRS_EXTRA	:=	-L$(TOPDIR)/wiiu/libs
 
 #---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
@@ -93,9 +98,9 @@ export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 			-I$(DEVKITPRO)/portlibs/wiiu/include/SDL2 \
 			-I$(CURDIR)/$(BUILD) \
 			-idirafter $(DEVKITPRO)/libogc/include
-export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib) $(LIBDIRS_EXTRA)
 
-export APP_NAME APP_SHORTNAME APP_AUTHOR ICON
+export APP_NAME APP_SHORTNAME APP_AUTHOR APP_ICON APP_TV_SPLASH APP_DRC_SPLASH
 
 .PHONY: $(BUILD) clean all
 
@@ -111,6 +116,7 @@ $(BUILD):
 		$(MAKE) --no-print-directory -C picodrive -f Makefile.libretro platform=wiiu clean >/dev/null 2>&1 || true; \
 		rm -f picodrive/.built_for_wii; touch picodrive/.built_for_wiiu; fi
 	@$(MAKE) --no-print-directory -C picodrive -f Makefile.wiiu OUT=$(CURDIR)/$(BUILD)/picodrive_core.o
+	@$(MAKE) --no-print-directory -C wiiu/libs
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile.wiiu
 
 clean:
@@ -118,6 +124,7 @@ clean:
 	@rm -fr $(BUILD) $(TARGET).rpx $(TARGET).wuhb $(TARGET).elf
 	@$(MAKE) --no-print-directory -C picodrive -f Makefile.libretro platform=wiiu clean >/dev/null 2>&1 || true
 	@rm -f picodrive/.built_for_wiiu picodrive/picodrive_all_wiiu.o
+	@$(MAKE) --no-print-directory -C wiiu/libs clean
 
 #---------------------------------------------------------------------------------
 else

@@ -803,7 +803,7 @@ static void rm_from_hashlist_unresolved(struct block_link *bl, int tcache_id)
     bl->next->prev = bl->prev;
 }
 
-static void dr_block_link(struct block_entry *be, struct block_link *bl, int emit_jump)
+static void dr_block_link_wr(struct block_entry *be, struct block_link *bl, int emit_jump)
 {
   dbg(2, "- %slink from %p to pc %08x entry %p", emit_jump ? "":"early ",
     bl->jump, bl->target_pc, be->tcache_ptr);
@@ -845,7 +845,15 @@ static void dr_block_link(struct block_entry *be, struct block_link *bl, int emi
   be->links = bl;
 }
 
-static void dr_block_unlink(struct block_link *bl, int emit_jump)
+// code writers: the code area is made writable around them (DRC_WR_*)
+static void dr_block_link(struct block_entry *be, struct block_link *bl, int emit_jump)
+{
+  DRC_WR_BEGIN();
+  dr_block_link_wr(be, bl, emit_jump);
+  DRC_WR_END();
+}
+
+static void dr_block_unlink_wr(struct block_link *bl, int emit_jump)
 {
   dbg(2,"- unlink from %p to pc %08x", bl->jump, bl->target_pc);
 
@@ -883,6 +891,13 @@ static void dr_block_unlink(struct block_link *bl, int emit_jump)
   }
 }
 #endif
+
+static void dr_block_unlink(struct block_link *bl, int emit_jump)
+{
+  DRC_WR_BEGIN();
+  dr_block_unlink_wr(bl, emit_jump);
+  DRC_WR_END();
+}
 
 static struct block_link *dr_prepare_ext_branch(struct block_entry *owner, u32 pc, int is_slave, int tcache_id)
 {
@@ -3250,7 +3265,7 @@ static void emit_branch_linkage_code(SH2 *sh2, struct block_desc *block, int tca
 static void *dr_get_pc_base(u32 pc, SH2 *sh2);
 static void sh2_smc_rm_blocks(u32 a, int len, int tcache_id, int free);
 
-static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
+static void REGPARM(2) *sh2_translate_wr(SH2 *sh2, int tcache_id)
 {
   // branch targets in current block
   static struct linkage branch_targets[MAX_LOCAL_TARGETS];
@@ -5254,6 +5269,15 @@ end_op:
   return block_entry_ptr;
 }
 
+static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
+{
+  void *ret;
+  DRC_WR_BEGIN();
+  ret = sh2_translate_wr(sh2, tcache_id);
+  DRC_WR_END();
+  return ret;
+}
+
 static void sh2_generate_utils(void)
 {
   int arg0, arg1, arg2, arg3, sr, tmp, tmp2;
@@ -5971,10 +5995,12 @@ int sh2_drc_init(SH2 *sh2)
     drc_cmn_init();
     rcache_init();
 
+    DRC_WR_BEGIN();
     tcache_ptr = tcache;
     sh2_generate_utils();
     host_instructions_updated(tcache, tcache_ptr, 1);
     emith_update_cache();
+    DRC_WR_END();
 
     i = tcache_ptr - tcache;
     RING_INIT(&tcache_ring[0], tcache_ptr, tcache_sizes[0] - i);

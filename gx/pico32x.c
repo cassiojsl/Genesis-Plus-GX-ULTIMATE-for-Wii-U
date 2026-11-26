@@ -39,6 +39,44 @@ extern void gx_cheat_code_changed(void);
 extern void gx_cheat_ram(unsigned int addr, unsigned int data, int word);
 extern int gx_fm_gain, gx_psg_gain;  /* FM and PSG volumes, 256 = PicoDrive's levels */
 
+#ifdef HW_WUP
+/* Wii U: PicoDrive runs on the core allowed to use the code area of its
+   SH-2 recompiler (wiiu/wiiu_sys.c), the calls below go through it */
+#include "wiiu_bridge.h"
+
+typedef struct
+{
+  const void *p;
+  size_t n;
+  unsigned int a, d;
+  int r;
+} jit_args_t;
+
+static void j_init(void *x)       { (void)x; retro_init(); }
+static void j_load(void *x)       { jit_args_t *j = x; j->r = retro_load_game((const struct retro_game_info *)j->p); }
+static void j_unload(void *x)     { (void)x; retro_unload_game(); }
+static void j_run(void *x)        { (void)x; retro_run(); }
+static void j_reset(void *x)      { (void)x; retro_reset(); }
+static void j_ser_size(void *x)   { jit_args_t *j = x; j->n = retro_serialize_size(); }
+static void j_ser(void *x)        { jit_args_t *j = x; j->r = retro_serialize((void *)j->p, j->n); }
+static void j_unser(void *x)      { jit_args_t *j = x; j->r = retro_unserialize(j->p, j->n); }
+static void j_cheat_rom(void *x)  { jit_args_t *j = x; j->r = gx_cheat_rom(j->a, j->d); }
+static void j_cheat_done(void *x) { (void)x; gx_cheat_code_changed(); }
+static void j_cheat_ram(void *x)  { jit_args_t *j = x; gx_cheat_ram(j->a, j->d, j->r); }
+
+#define retro_init()             wiiu_jit_call(j_init, NULL)
+#define retro_load_game(i)       ({ jit_args_t j_ = {0}; j_.p = (i); wiiu_jit_call(j_load, &j_); (bool)j_.r; })
+#define retro_unload_game()      wiiu_jit_call(j_unload, NULL)
+#define retro_run()              wiiu_jit_call(j_run, NULL)
+#define retro_reset()            wiiu_jit_call(j_reset, NULL)
+#define retro_serialize_size()   ({ jit_args_t j_ = {0}; wiiu_jit_call(j_ser_size, &j_); j_.n; })
+#define retro_serialize(b, n_)   ({ jit_args_t j_ = {0}; j_.p = (b); j_.n = (n_); wiiu_jit_call(j_ser, &j_); (bool)j_.r; })
+#define retro_unserialize(b, n_) ({ jit_args_t j_ = {0}; j_.p = (b); j_.n = (n_); wiiu_jit_call(j_unser, &j_); (bool)j_.r; })
+#define gx_cheat_rom(a_, d_)     ({ jit_args_t j_ = {0}; j_.a = (a_); j_.d = (d_); wiiu_jit_call(j_cheat_rom, &j_); j_.r; })
+#define gx_cheat_code_changed()  wiiu_jit_call(j_cheat_done, NULL)
+#define gx_cheat_ram(a_, d_, w_) do { jit_args_t j_ = {0}; j_.a = (a_); j_.d = (d_); j_.r = (w_); wiiu_jit_call(j_cheat_ram, &j_); } while (0)
+#endif
+
 int pico32x_active = 0;
 
 static int core_ready = 0;
@@ -78,7 +116,12 @@ static const char *option_value(const char *key)
   static const char *renderer[] = { "good", "accurate", "fast" };
 
   if (!strcmp(key, "picodrive_drc"))
+#ifdef HW_WUP
+    /* experimental: only with the codegen area of the system */
+    return (config.p32x_drc && wiiu_jit_available()) ? "enabled" : "disabled";
+#else
     return config.p32x_drc ? "enabled" : "disabled";
+#endif
   if (!strcmp(key, "picodrive_renderer"))
     return renderer[(config.p32x_renderer < 3) ? config.p32x_renderer : 0];
   if (!strcmp(key, "picodrive_sprlim"))
@@ -141,7 +184,11 @@ static const char *option_value(const char *key)
 
 void pico32x_config_default(void)
 {
+#ifdef HW_WUP
+  config.p32x_drc = 0;              /* Wii U: experimental, off by default */
+#else
   config.p32x_drc = 1;              /* as tested on the Wii: full speed */
+#endif
   config.p32x_renderer = PICO32X_RENDERER_GOOD;
   config.p32x_msh2 = 100;
   config.p32x_ssh2 = 100;

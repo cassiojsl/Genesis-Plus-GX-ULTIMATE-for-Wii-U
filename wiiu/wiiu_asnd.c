@@ -35,6 +35,7 @@
 #include <asndlib.h>
 #include <string.h>
 #include "wiiu_audio.h"
+#include "wiiu_bridge.h"
 
 #define RATE 48000
 
@@ -111,7 +112,10 @@ static void mix(void *user, Uint8 *stream, int len)
   /* game sound */
   if (stream_on)
   {
-    for (i = 0; i < frames && fifo_rd != fifo_wr; i++)
+    /* the cores of the Wii U do not see the writes of each other in order */
+    u32 wr = fifo_wr;
+    __sync_synchronize();
+    for (i = 0; i < frames && fifo_rd != wr; i++)
     {
       u32 p = (fifo_rd % FIFO_FRAMES) * 2;
 #ifdef BLIP_INVERT
@@ -195,6 +199,43 @@ static void open_device(void)
   if (dev) SDL_PauseAudioDevice(dev, 0);
 }
 
+/* Nothing to play (no menu music, no menu sound, no game): the sound output
+   of the system is closed, and opened again by the next sound. The output
+   of the Wii U is never left running with nothing to play. */
+#define IDLE_CLOSE_MS 500
+
+void wiiu_asnd_idle(void)
+{
+  static Uint32 idle_since;
+  int i, busy = stream_on;
+  Uint32 now;
+
+  if (!dev)
+    return;
+
+  if (!busy)
+  {
+    SDL_LockMutex(lock);
+    for (i = 0; i < MAX_SND_VOICES; i++)
+      if (voices[i].active && !voices[i].paused)
+        busy = 1;
+    SDL_UnlockMutex(lock);
+  }
+
+  now = SDL_GetTicks();
+  if (busy || !idle_since)
+  {
+    idle_since = busy ? 0 : now;
+    return;
+  }
+  if ((now - idle_since) >= IDLE_CLOSE_MS)
+  {
+    SDL_CloseAudioDevice(dev);
+    dev = 0;
+    idle_since = 0;
+  }
+}
+
 void ASND_Init(void)
 {
   open_device();
@@ -212,6 +253,14 @@ void ASND_End(void)
   SDL_UnlockMutex(lock);
 }
 
+/* the lock of the mixer, for the OGG player (gx/utils/oggplayer.c) */
+void wiiu_asnd_lock(int on)
+{
+  if (!lock) lock = SDL_CreateMutex();
+  if (on) SDL_LockMutex(lock);
+  else SDL_UnlockMutex(lock);
+}
+
 void ASND_Pause(s32 paused) { asnd_paused = paused; }
 s32 ASND_Is_Paused(void) { return asnd_paused; }
 s32 ASND_GetAudioRate(void) { return RATE; }
@@ -221,6 +270,7 @@ s32 ASND_SetVoice(s32 voice, s32 format, s32 pitch, s32 delay, void *snd, s32 si
   voice_t *v;
   (void)delay;
   if ((voice < 0) || (voice >= MAX_SND_VOICES) || (pitch < MIN_PITCH) || !snd) return SND_INVALID;
+
   open_device();
   SDL_LockMutex(lock);
   v = &voices[voice];
@@ -247,6 +297,7 @@ s32 ASND_AddVoice(s32 voice, void *snd, s32 size_snd)
   voice_t *v;
   s32 ret = SND_OK;
   if ((voice < 0) || (voice >= MAX_SND_VOICES)) return SND_INVALID;
+  __sync_synchronize(); /* the samples of the buffer, written by another core */
   SDL_LockMutex(lock);
   v = &voices[voice];
   if (!v->active) ret = SND_INVALID;
@@ -350,17 +401,19 @@ u32 wiiu_stream_queued(void)
 void wiiu_stream_push(const s16 *samples, int frames)
 {
   int i;
+  u32 wr = fifo_wr;
   for (i = 0; i < frames; i++)
   {
-    if (wiiu_stream_queued() >= FIFO_FRAMES - 1)
+    u32 p;
+    if (wr - fifo_rd >= FIFO_FRAMES - 1)
       break; /* full (fast-forward): the rest is dropped */
-    {
-      u32 p = (fifo_wr % FIFO_FRAMES) * 2;
-      fifo[p] = samples[i * 2];
-      fifo[p + 1] = samples[i * 2 + 1];
-      fifo_wr++;
-    }
+    p = (wr % FIFO_FRAMES) * 2;
+    fifo[p] = samples[i * 2];
+    fifo[p + 1] = samples[i * 2 + 1];
+    wr++;
   }
+  __sync_synchronize();
+  fifo_wr = wr;
 }
 
 /****************************************************************************

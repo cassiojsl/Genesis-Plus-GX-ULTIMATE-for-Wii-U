@@ -31,7 +31,9 @@
 #include <setjmp.h>
 #include <malloc.h>
 #include <dirent.h>
+#ifndef HW_WUP
 #include <png.h>
+#endif
 
 #ifdef GEKKO
 #include <ogc/cache.h>
@@ -252,6 +254,81 @@ void bezel_free(bezel_image *b)
 	memset(b, 0, sizeof(*b));
 }
 
+#ifdef HW_WUP
+/* Wii U: the PNG is read by SDL_image (wiiu_video.c), as RGBA rows; the
+   libpng of the Wii portlibs is not used */
+extern int wiiu_png_rgba(const char *path, const void *data, unsigned int size,
+                         unsigned char **pixels, int *w, int *h);
+
+static int load_rgba(bezel_image *b, const char *path, const void *data, unsigned int size, int width, int height)
+{
+	unsigned char *pixels = NULL, *tex = NULL, *alpha = NULL;
+	float *hrow = NULL, *acc = NULL;
+	int sw, sh, y, ok = 0;
+	scaler s;
+
+	bezel_free(b);
+	if (width <= 0 || height <= 0 || width > MAX_TEXTURE || height > MAX_TEXTURE)
+		return 0;
+	if (!wiiu_png_rgba(path, data, size, &pixels, &sw, &sh))
+		return 0;
+	if (sw <= 0 || sh <= 0 || sw > MAX_PNG_SIDE || sh > MAX_PNG_SIDE)
+		goto done;
+
+	memset(&s, 0, sizeof(s));
+	s.sw = sw;
+	s.sh = sh;
+	s.tw = width;
+	s.th = height;
+	s.tex_w = (width + 3) & ~3;
+	s.nacc = height / s.sh + 2;
+
+	b->width = width;
+	b->height = height;
+	b->tex_width = s.tex_w;
+	b->tex_height = (height + 3) & ~3;
+
+	tex = (unsigned char *) memalign(32, b->tex_width * b->tex_height * 4);
+	alpha = (unsigned char *) malloc(width * height);
+	hrow = (float *) malloc(width * 4 * sizeof(float));
+	acc = (float *) malloc(s.nacc * width * 4 * sizeof(float));
+	if (!tex || !alpha || !hrow || !acc)
+		goto done;
+	memset(tex, 0, b->tex_width * b->tex_height * 4); /* padding: transparent */
+	s.tex = tex;
+	s.alpha = alpha;
+	s.hrow = hrow;
+	s.acc = acc;
+
+	for (y = 0; y < sh; y++)
+		add_row(&s, pixels + (size_t) y * sw * 4);
+
+	b->texture = tex;
+	tex = NULL;
+	find_hole(b, alpha);
+	ok = 1;
+
+done:
+	free(pixels);
+	free(tex);
+	free(hrow);
+	free(acc);
+	free(alpha);
+	if (!ok)
+		bezel_free(b);
+	return ok;
+}
+
+int bezel_load(bezel_image *b, const char *path, int width, int height)
+{
+	return load_rgba(b, path, NULL, 0, width, height);
+}
+
+int bezel_load_memory(bezel_image *b, const void *data, unsigned int size, int width, int height)
+{
+	return load_rgba(b, NULL, data, size, width, height);
+}
+#else
 typedef struct
 {
 	jmp_buf jmp;
@@ -441,6 +518,7 @@ int bezel_load_memory(bezel_image *b, const void *data, unsigned int size, int w
 	mem.pos = 0;
 	return load_png(b, NULL, &mem, width, height);
 }
+#endif
 
 static int name_cmp(const void *a, const void *b)
 {

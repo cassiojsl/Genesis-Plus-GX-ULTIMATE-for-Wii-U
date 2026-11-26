@@ -29,3 +29,7 @@ build_wii/
 /genplus_wii.elf
 /genplus_wii.dol
 /genplus_wii.elf.map
+
+# Wii U USB library (wiiu/libs) build outputs
+wiiu/libs/obj/
+wiiu/libs/libwiiuusb.a

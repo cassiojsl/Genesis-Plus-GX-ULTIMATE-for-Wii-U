@@ -109,8 +109,23 @@ void legal ()
     if (count%25 == 0) vis^=1;
     if (vis)
     {
+#ifdef HW_WUP
+      {
+        /* the font of the Wii U menus is not the one of the Wii: the A icon
+           after the width of "Press", with a space on each side */
+        int gap = 6;
+        int w = FONT_getWidth("Press",24) + gap + button->width + gap + FONT_getWidth("button to continue.",24);
+        int x = (640 - w) / 2;
+        FONT_write("Press",24,x,366,640,(GXColor)SKY_BLUE);
+        x += FONT_getWidth("Press",24) + gap;
+        gxDrawTexture(button, x, 366-24+(24-button->height)/2, button->width, button->height,255);
+        x += button->width + gap;
+        FONT_write("button to continue.",24,x,366,640,(GXColor)SKY_BLUE);
+      }
+#else
       FONT_writeCenter("Press    button to continue.",24,0,640,366,(GXColor)SKY_BLUE);
       gxDrawTexture(button, 220, 366-24+(24-button->height)/2,  button->width, button->height,255);
+#endif
     }
     gxDrawTexture(logo, (640-logo->width)/2, 480-24-logo->height, logo->width, logo->height,255);
     gxSetScreen();

@@ -48,6 +48,21 @@
 #include "file_load.h"
 #include "autocrop.h"
 #include "bezel.h"
+
+/* Auto Crop of a new config: FIT on the Wii U (16:9 screen), OFF on the Wii */
+#ifdef HW_WUP
+#define AUTOCROP_DEFAULT AUTOCROP_FIT
+#else
+#define AUTOCROP_DEFAULT AUTOCROP_OFF
+#endif
+
+/* games on a USB drive: from its root on the Wii U (only the games are on
+   the drive, the rest is on the SD card), from the data folder on the Wii */
+#ifdef HW_WUP
+#define USB_ROMS_DIR "usb:/"
+#else
+#define USB_ROMS_DIR "usb:" DEFAULT_PATH "/roms/"
+#endif
 #include "gamesettings.h"
 
 #include <stddef.h>
@@ -96,7 +111,7 @@ static int config_load(void)
 
     /* read file */
     fseek(fp, 0, SEEK_SET);
-    config.autocrop = AUTOCROP_OFF;
+    config.autocrop = AUTOCROP_DEFAULT;
     config.autocrop_scale = AUTOCROP_SCALE_SMOOTH;
     config.m68k_auto_overclock = 0;
     config.s68k_auto_overclock = 0;
@@ -127,7 +142,7 @@ static int config_load(void)
     }
     if ((size <= (long)offsetof(t_config, autocrop)) || (config.autocrop >= AUTOCROP_MODES))
     {
-      config.autocrop = AUTOCROP_OFF;
+      config.autocrop = AUTOCROP_DEFAULT;
     }
     if ((size <= (long)offsetof(t_config, autocrop_scale)) || (config.autocrop_scale >= AUTOCROP_SCALINGS))
     {
@@ -147,6 +162,18 @@ static int config_load(void)
     }
     /* 32X settings: the defaults set before for older files, else checked */
     pico32x_config_check();
+
+#ifdef HW_WUP
+    /* the USB folders of the first Wii U versions: the root of the drive */
+    {
+      int i;
+      for (i = 0; i < 5; i++)
+        if (!strncmp(config.lastdir[i][TYPE_USB], "usb:" DEFAULT_PATH, strlen("usb:" DEFAULT_PATH)))
+          strcpy(config.lastdir[i][TYPE_USB], USB_ROMS_DIR);
+      if (!strncmp(config.lastdir_32x[TYPE_USB], "usb:" DEFAULT_PATH, strlen("usb:" DEFAULT_PATH)))
+        strcpy(config.lastdir_32x[TYPE_USB], USB_ROMS_DIR);
+    }
+#endif
 
     /* MODE on the same button as C (L and R of the 6-button USB pads were C) */
     gx_input_CheckKeys();
@@ -280,7 +307,7 @@ void config_default(void)
   /* on-screen options */
   config.cd_leds = 0;
   config.fps     = 0;
-  config.autocrop = AUTOCROP_OFF;
+  config.autocrop = AUTOCROP_DEFAULT;
   config.autocrop_scale = AUTOCROP_SCALE_SMOOTH;
   memset(config.bezel, 0, sizeof(config.bezel));
   strcpy(config.bezel, BEZEL_DEFAULT); /* the bezel built into the emulator */
@@ -320,18 +347,18 @@ void config_default(void)
   sprintf (config.lastdir[2][TYPE_SD],  "sd:%s/roms/",  DEFAULT_PATH);
   sprintf (config.lastdir[3][TYPE_SD],  "sd:%s/roms/",  DEFAULT_PATH);
   sprintf (config.lastdir[4][TYPE_SD],  "sd:%s/roms/",  DEFAULT_PATH);
-  sprintf (config.lastdir[0][TYPE_USB], "usb:%s/roms/", DEFAULT_PATH);
-  sprintf (config.lastdir[1][TYPE_USB], "usb:%s/roms/", DEFAULT_PATH);
-  sprintf (config.lastdir[2][TYPE_USB], "usb:%s/roms/", DEFAULT_PATH);
-  sprintf (config.lastdir[3][TYPE_USB], "usb:%s/roms/", DEFAULT_PATH);
-  sprintf (config.lastdir[4][TYPE_USB], "usb:%s/roms/", DEFAULT_PATH);
+  sprintf (config.lastdir[0][TYPE_USB], "%s", USB_ROMS_DIR);
+  sprintf (config.lastdir[1][TYPE_USB], "%s", USB_ROMS_DIR);
+  sprintf (config.lastdir[2][TYPE_USB], "%s", USB_ROMS_DIR);
+  sprintf (config.lastdir[3][TYPE_USB], "%s", USB_ROMS_DIR);
+  sprintf (config.lastdir[4][TYPE_USB], "%s", USB_ROMS_DIR);
   sprintf (config.lastdir[0][TYPE_DVD], "dvd:%s/roms/", DEFAULT_PATH);
   sprintf (config.lastdir[1][TYPE_DVD], "dvd:%s/roms/", DEFAULT_PATH);
   sprintf (config.lastdir[2][TYPE_DVD], "dvd:%s/roms/", DEFAULT_PATH);
   sprintf (config.lastdir[3][TYPE_DVD], "dvd:%s/roms/", DEFAULT_PATH);
   sprintf (config.lastdir[4][TYPE_DVD], "dvd:%s/roms/", DEFAULT_PATH);
   sprintf (config.lastdir_32x[TYPE_SD],  "sd:%s/roms/",  DEFAULT_PATH);
-  sprintf (config.lastdir_32x[TYPE_USB], "usb:%s/roms/", DEFAULT_PATH);
+  sprintf (config.lastdir_32x[TYPE_USB], "%s", USB_ROMS_DIR);
   sprintf (config.lastdir_32x[TYPE_DVD], "dvd:%s/roms/", DEFAULT_PATH);
 #else
   config.l_device = TYPE_SD;
