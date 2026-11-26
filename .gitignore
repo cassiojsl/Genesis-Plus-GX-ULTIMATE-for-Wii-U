@@ -25,3 +25,7 @@ picodrive/.built_for_wii
 picodrive/.built_for_wiiu
 picodrive/picodrive_all_wiiu.o
 picodrive/picodrive_core_wiiu.o
+build_wii/
+/genplus_wii.elf
+/genplus_wii.dol
+/genplus_wii.elf.map
