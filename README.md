@@ -6,8 +6,6 @@
 
 **Wii U:** a **native Wii U port** (a Wii U app for Aroma, not the Wii version in vWii mode), with the same interface as the Wii version in widescreen: it uses the three cores of the Wii U, its GPU at 720p, the GamePad (touch screen, HOME Menu), SD card and FAT32 USB drives, Wii Remote, Classic and Pro Controllers, and runs the 32X with PicoDrive's SH-2 recompiler in the JIT area of the system. Source in `wiiu/`, built with `make -f Makefile.wiiu` (devkitPro wut). See [wiiu/README.md](wiiu/README.md).
 
-**Wii U:** um **port nativo para Wii U** (um app de Wii U para o Aroma, não a versão de Wii no modo vWii), com a mesma interface da versão de Wii em widescreen: usa os três núcleos do Wii U, a GPU em 720p, o GamePad (tela de toque, HOME Menu), cartão SD e pen drives/HDs USB em FAT32, Wiimote, Classic e Pro Controller, e roda o 32X com o recompilador de SH-2 do PicoDrive na área de JIT do sistema. Código em `wiiu/`. Veja [wiiu/README.md](wiiu/README.md).
-
 The original Genesis Plus GX readme follows.
 
 ----
