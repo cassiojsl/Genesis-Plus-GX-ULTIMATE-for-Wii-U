@@ -649,7 +649,11 @@ int main (int argc, char *argv[])
   /* initialize stub loader detection */
   reload = 0;
 
-#ifdef HW_RVL
+#ifdef HW_WUP
+  /* Wii U: no loader stub in memory (0x80001800 is not mapped there), the
+     Exit option goes back to the Wii U Menu (wiiu/wiiu_ogc.c) */
+  SYS_SetPowerCallback(PowerOff_cb);
+#elif defined(HW_RVL)
   /* autodetect loader arguments */
   if ((argc >= 4) && (argv[3] != NULL))
   {

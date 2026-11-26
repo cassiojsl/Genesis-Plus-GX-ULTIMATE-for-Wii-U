@@ -71,8 +71,8 @@
 /* 32 bytes aligned sound buffers (8 samples alignment) */
 #define ALIGN_SND 0xfffffff8
 
-/* use Wii DVD LED to indicate when virtual CD tray is open */
-#ifdef HW_RVL
+/* use Wii DVD LED to indicate when virtual CD tray is open (not on the Wii U) */
+#if defined(HW_RVL) && !defined(HW_WUP)
 #define CD_TRAY_CALLBACK *(u32*)0xcd0000c0 = (*(u32*)0xcd0000c0 & ~0x20) | ((cdd.status == CD_OPEN) << 5);
 #endif
 
