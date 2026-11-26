@@ -110,9 +110,11 @@ s32 WPAD_ScanPads(void)
     memset(&d->ir, 0, sizeof(d->ir));
     if (s->connected && s->ir_valid)
     {
+      float x, y;
+      wiiu_menu_point(s->ir_x, s->ir_y, &x, &y);
       d->ir.valid = d->ir.smooth_valid = d->ir.raw_valid = 1;
-      d->ir.x = d->ir.sx = d->ir.ax = s->ir_x;
-      d->ir.y = d->ir.sy = d->ir.ay = s->ir_y;
+      d->ir.x = d->ir.sx = d->ir.ax = x;
+      d->ir.y = d->ir.sy = d->ir.ay = y;
       d->ir.vres[0] = 640;
       d->ir.vres[1] = 480;
     }
@@ -127,8 +129,7 @@ s32 WPAD_ScanPads(void)
     if (t->touch)
     {
       touch_frames = 6;
-      touch_x = t->tx;
-      touch_y = t->ty;
+      wiiu_menu_point(t->tx, t->ty, &touch_x, &touch_y);
     }
     else if (touch_frames == 6)
     {

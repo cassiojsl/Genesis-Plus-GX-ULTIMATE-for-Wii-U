@@ -23,7 +23,7 @@ typedef struct
   float lx, ly;       /* left stick (nunchuk, classic, pro), -1..1, up is positive */
   float rx, ry;       /* right stick (classic, pro) */
   int ir_valid;       /* the Wii Remote points at the screen */
-  float ir_x, ir_y;   /* in the 640x480 menu screen */
+  float ir_x, ir_y;   /* where, 0..1 across the TV picture */
 } wiiu_wpad_state;
 
 /* Wii U GamePad */
@@ -34,7 +34,7 @@ typedef struct
   uint8_t extra;      /* WIIDRC_EXTRA_BUTTON_L3 / R3 / TV */
   float lx, ly, rx, ry; /* sticks, -1..1, up is positive */
   int touch;          /* the screen is touched */
-  float tx, ty;       /* where, in the 640x480 menu screen */
+  float tx, ty;       /* where, 0..1 across the screen */
 } wiiu_drc_state;
 
 void wiiu_input_init(void);
@@ -42,6 +42,9 @@ void wiiu_wpad_scan(void);
 void wiiu_drc_scan(void);
 const wiiu_wpad_state *wiiu_wpad(int chan);
 const wiiu_drc_state *wiiu_drc(void);
+
+/* screen position (0..1) to the 640x480 menu screen of the Wii (wiiu_video.c) */
+void wiiu_menu_point(float fx, float fy, float *x, float *y);
 
 /* time */
 uint64_t wiiu_time_us(void);

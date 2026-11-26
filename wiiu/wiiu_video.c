@@ -321,11 +321,65 @@ void gxTextureClose(gx_texture **p_texture)
 
 /****************************************************************************
  * Drawing (640x480 menu coordinates)
+ *
+ * Widescreen menu (WIIU_WIDE_MENU): the 640x480 screen of the Wii is drawn
+ * at its own proportions in the middle of the 16:9 picture (854x480, x1.5),
+ * and what covers its whole width (backgrounds, banners, dimming) is drawn
+ * to the edges: tiles repeat, banners repeat one period of their grid.
+ * The game picture keeps its own scaling (the whole 16:9 picture, as the
+ * aspect settings of the emulator say).
  ****************************************************************************/
+
+#ifndef WIIU_WIDE_MENU
+#define WIIU_WIDE_MENU 1
+#endif
+
+#define MENU_FULL_W   854                     /* 1280 / 1.5 */
+#define MENU_OX       ((MENU_FULL_W - 640) / 2)
+#define BANNER_PERIOD 36                      /* the grid of the banners */
+#define BANNER_EDGE   72                      /* their ends, with the corners of the frame */
+
+static int view_ox;      /* where the 640 wide Wii screen starts */
+static int view_w;       /* the whole width, in the same units */
+
+static void set_menu_view(void)
+{
+#if WIIU_WIDE_MENU
+  view_ox = MENU_OX;
+  view_w = MENU_FULL_W;
+  SDL_RenderSetScale(renderer, (float)SCREEN_H / 480.0f, (float)SCREEN_H / 480.0f);
+#else
+  view_ox = 0;
+  view_w = 640;
+  SDL_RenderSetScale(renderer, (float)SCREEN_W / 640.0f, (float)SCREEN_H / 480.0f);
+#endif
+}
+
+static void set_game_view(void)
+{
+  view_ox = 0;
+  view_w = 640;
+  SDL_RenderSetScale(renderer, (float)SCREEN_W / 640.0f, (float)SCREEN_H / 480.0f);
+}
+
+/* menu position (0..1 across the screen) to the 640x480 Wii screen */
+void wiiu_menu_point(float fx, float fy, float *x, float *y)
+{
+#if WIIU_WIDE_MENU
+  *x = fx * ((float)SCREEN_W * 480.0f / (float)SCREEN_H) - MENU_OX;
+#else
+  *x = fx * 640.0f;
+#endif
+  *y = fy * 480.0f;
+}
+
+/* covers the whole width of the Wii screen */
+#define FULL_WIDTH(x, w) (((x) <= 0) && ((x) + (w) >= 640))
 
 void gxDrawRectangle(s32 x, s32 y, s32 w, s32 h, u8 alpha, GXColor color)
 {
-  SDL_Rect r = { x, y, w, h };
+  SDL_Rect r = { x + view_ox, y, w, h };
+  if (FULL_WIDTH(x, w)) { r.x = 0; r.w = view_w; }
   LOCK();
   SDL_SetRenderDrawBlendMode(renderer, (alpha == 255) ? SDL_BLENDMODE_NONE : SDL_BLENDMODE_BLEND);
   SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, alpha);
@@ -333,21 +387,56 @@ void gxDrawRectangle(s32 x, s32 y, s32 w, s32 h, u8 alpha, GXColor color)
   UNLOCK();
 }
 
+/* one piece [sx, sx+sw) of a banner (in 640 menu units) at x */
+static void banner_piece(wiiu_tex *t, gx_texture *texture, int bw, int sx, int sw, int x, int y, int h)
+{
+  SDL_Rect src, dst;
+  src.x = (sx * texture->width) / bw;
+  src.w = ((sx + sw) * texture->width) / bw - src.x;
+  src.y = 0;
+  src.h = texture->height;
+  dst.x = x; dst.y = y; dst.w = sw; dst.h = h;
+  if (src.w > 0) SDL_RenderCopy(renderer, t->tex, &src, &dst);
+}
+
 void gxDrawTexture(gx_texture *texture, s32 x, s32 y, s32 w, s32 h, u8 alpha)
 {
   wiiu_tex *t = tex_of(texture);
-  SDL_Rect r = { x, y, w, h };
+  SDL_Rect r = { x + view_ox, y, w, h };
   if (!t || !t->tex) return;
   LOCK();
   SDL_SetTextureAlphaMod(t->tex, alpha);
-  SDL_RenderCopy(renderer, t->tex, NULL, &r);
+
+  if (view_ox && FULL_WIDTH(x, w) && (w > 2 * BANNER_EDGE))
+  {
+    /* a banner across the screen: its middle in place, its ends (the
+       corners of the frame) at the edges of the 16:9 picture, and periods
+       of its grid, taken next to each end, between them */
+    int mid_l = BANNER_EDGE;                                  /* grid line */
+    int mid_r = ((w - BANNER_EDGE + BANNER_PERIOD - 1) / BANNER_PERIOD) * BANNER_PERIOD;
+    int dx;
+
+    banner_piece(t, texture, w, mid_l, mid_r - mid_l, r.x + mid_l, r.y, r.h);
+
+    for (dx = r.x + mid_l - BANNER_PERIOD; dx + BANNER_PERIOD > BANNER_EDGE; dx -= BANNER_PERIOD)
+      banner_piece(t, texture, w, mid_l, BANNER_PERIOD, dx, r.y, r.h);
+    banner_piece(t, texture, w, 0, BANNER_EDGE, 0, r.y, r.h);
+
+    for (dx = r.x + mid_r; dx < view_w - BANNER_EDGE; dx += BANNER_PERIOD)
+      banner_piece(t, texture, w, mid_r - BANNER_PERIOD, BANNER_PERIOD, dx, r.y, r.h);
+    banner_piece(t, texture, w, w - BANNER_EDGE, BANNER_EDGE, view_w - BANNER_EDGE, r.y, r.h);
+  }
+  else
+  {
+    SDL_RenderCopy(renderer, t->tex, NULL, &r);
+  }
   UNLOCK();
 }
 
 void gxDrawTextureRotate(gx_texture *texture, s32 x, s32 y, s32 w, s32 h, f32 angle, u8 alpha)
 {
   wiiu_tex *t = tex_of(texture);
-  SDL_Rect r = { x, y, w, h };
+  SDL_Rect r = { x + view_ox, y, w, h };
   if (!t || !t->tex) return;
   LOCK();
   SDL_SetTextureAlphaMod(t->tex, alpha);
@@ -358,19 +447,30 @@ void gxDrawTextureRotate(gx_texture *texture, s32 x, s32 y, s32 w, s32 h, f32 an
 void gxDrawTextureRepeat(gx_texture *texture, s32 x, s32 y, s32 w, s32 h, u8 alpha)
 {
   wiiu_tex *t = tex_of(texture);
-  int tx, ty;
+  int tx, ty, x0, w0;
   if (!t || !t->tex || !texture->width || !texture->height) return;
+
+  /* tiles across the screen go to the edges, in step with the Wii screen */
+  x0 = x + view_ox;
+  w0 = w;
+  if (FULL_WIDTH(x, w) && view_ox)
+  {
+    int n = (view_ox + texture->width - 1) / texture->width;
+    x0 -= n * texture->width;
+    w0 = view_w - x0;
+  }
+
   LOCK();
   SDL_SetTextureAlphaMod(t->tex, alpha);
   for (ty = 0; ty < h; ty += texture->height)
   {
-    for (tx = 0; tx < w; tx += texture->width)
+    for (tx = 0; tx < w0; tx += texture->width)
     {
       SDL_Rect src = { 0, 0, texture->width, texture->height };
       SDL_Rect dst;
-      if (tx + src.w > w) src.w = w - tx;
+      if (tx + src.w > w0) src.w = w0 - tx;
       if (ty + src.h > h) src.h = h - ty;
-      dst.x = x + tx; dst.y = y + ty; dst.w = src.w; dst.h = src.h;
+      dst.x = x0 + tx; dst.y = y + ty; dst.w = src.w; dst.h = src.h;
       SDL_RenderCopy(renderer, t->tex, &src, &dst);
     }
   }
@@ -515,9 +615,14 @@ static void draw_game(u8 alpha)
   UNLOCK();
 }
 
+/* the game picture behind the menu: as in the game */
 void gxDrawScreenshot(u8 alpha)
 {
+  LOCK();
+  set_game_view();
   draw_game(alpha);
+  set_menu_view();
+  UNLOCK();
 }
 
 /* the game picture as a PNG (save state previews, snapshots) */
@@ -725,6 +830,7 @@ int gx_video_Update(int status)
       untile();
 
       LOCK();
+      set_game_view();
       screen_texture();
       if (screen_tex)
         SDL_UpdateTexture(screen_tex, NULL, untiled, vwidth * 2);
@@ -776,6 +882,7 @@ int gx_video_Update(int status)
 
       LOCK();
       SDL_RenderPresent(renderer);
+      set_menu_view();
       UNLOCK();
     }
 
@@ -810,8 +917,8 @@ void gx_video_Init(void)
   if (!renderer) renderer = SDL_CreateRenderer(window, -1, 0);
   render_lock = SDL_CreateMutex();
 
-  /* the 640x480 menu screen of the Wii on the whole 16:9 picture */
-  SDL_RenderSetScale(renderer, (float)SCREEN_W / 640.0f, (float)SCREEN_H / 480.0f);
+  /* the 640x480 menu screen of the Wii in the 16:9 picture */
+  set_menu_view();
 
   untiled = (u16 *)calloc(720 * 576, sizeof(u16));
 
@@ -952,7 +1059,7 @@ static void draw_char(font_cache *f, u8 c, int x, int y, GXColor color)
   SDL_Rect r;
   glyph_load(f, c);
   if (!f->glyph[c]) return;
-  r.x = x;
+  r.x = x + view_ox;
   r.y = y - f->size;
   r.w = (int)(f->gw[c] / font_scale + 0.5f);
   r.h = (int)(f->gh[c] / font_scale + 0.5f);

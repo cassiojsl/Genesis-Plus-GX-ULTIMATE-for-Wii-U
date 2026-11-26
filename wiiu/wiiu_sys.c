@@ -138,12 +138,12 @@ void wiiu_wpad_scan(void)
         break;
     }
 
-    /* pointer (Wii Remote only), -1..1 to the 640x480 menu screen */
+    /* pointer (Wii Remote only), -1..1 to 0..1 */
     if ((w->ext == WIIU_EXT_NONE || w->ext == WIIU_EXT_NUNCHUK) && (s.posValid > 0))
     {
       w->ir_valid = 1;
-      w->ir_x = (s.pos.x + 1.0f) * 320.0f;
-      w->ir_y = (s.pos.y + 1.0f) * 240.0f;
+      w->ir_x = (s.pos.x + 1.0f) * 0.5f;
+      w->ir_y = (s.pos.y + 1.0f) * 0.5f;
     }
   }
 }
@@ -180,8 +180,8 @@ void wiiu_drc_scan(void)
     VPADGetTPCalibratedPoint(VPAD_CHAN_0, &p, &s.tpNormal);
     /* calibrated to 1280x720 */
     drc.touch = 1;
-    drc.tx = p.x * 640.0f / 1280.0f;
-    drc.ty = p.y * 480.0f / 720.0f;
+    drc.tx = p.x / 1280.0f;
+    drc.ty = p.y / 720.0f;
   }
 }
 
