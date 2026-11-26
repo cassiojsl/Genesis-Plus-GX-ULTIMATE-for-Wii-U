@@ -376,3 +376,12 @@ void VIDEO_Flush(void) {}
 void VIDEO_Configure(GXRModeObj *rmode) { (void)rmode; }
 u32 VIDEO_HaveComponentCable(void) { return 1; }
 void VIDEO_SetGamma(VIGamma gamma) { (void)gamma; }
+
+/****************************************************************************
+ * Data cache (bezel.c flushes the texture it makes for the Wii GPU): the
+ * Wii U port reads that texture with the CPU (wiiu_video.c), nothing to do
+ ****************************************************************************/
+
+void PPCDCacheFlushAsync(const volatile void *buf, size_t size) { (void)buf; (void)size; }
+void PPCDCacheStoreAsync(const volatile void *buf, size_t size) { (void)buf; (void)size; }
+void PPCDCacheInvalidate(const volatile void *buf, size_t size) { (void)buf; (void)size; }

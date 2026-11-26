@@ -51,8 +51,9 @@
  *  TV and the GamePad), the game picture comes from the same RGB565 bitmap
  *  in 4x4 tiles that the line renderer writes for the Wii (CUSTOM_BLITTER).
  *
- *  Not done yet on the Wii U: bezels, auto crop, the sharp scaler, the VI
- *  settings (gamma, trap filter).
+ *  Bezels, auto crop and the sharp scaler follow gx_video.c (autocrop.c and
+ *  bezel.c are shared); gamma is applied to the picture; the trap filter
+ *  (VI hardware) has no equivalent.
  ****************************************************************************/
 
 /* SDL first: on the Wii U its headers bring wut's BOOL, not the one of libogc */
@@ -94,6 +95,10 @@
 #include "CD_access_on_png.h"
 #include "CD_ready_off_png.h"
 #include "CD_ready_on_png.h"
+#include "Bezel_default_png.h"
+#include "autocrop.h"
+#include "bezel.h"
+#include <sys/stat.h>
 #include "mplus1p_ttf.h"
 
 #define SCREEN_W 1280
@@ -697,16 +702,391 @@ static void screen_texture(void)
   }
 }
 
+/****************************************************************************
+ * Auto crop, bezels and sharp scaling: the rules of gx_video.c of the Wii
+ * port (autocrop.c and bezel.c are the same), drawn with SDL2.
+ ****************************************************************************/
+
+#define LEFT_BLANK_FRAMES 10
+#define BEZEL_FOLDER      DEFAULT_PATH "/bezels"
+#define SHARP_MAX         2048
+
+static autocrop_state autocrop;
+static int autocrop_mode = AUTOCROP_OFF;
+static int crop_border[AUTOCROP_SIDES];
+static int left_blank_frames;
+
+static bezel_image bezel;
+static SDL_Texture *bezel_tex;
+static char bezel_path[MAXPATHLEN];               /* the file tried last */
+static const char *bezel_places[] = { "", "sd:" }; /* default device first */
+
+static SDL_Texture *sharp_tex;
+static int sharp_tex_w, sharp_tex_h;
+
+/* the visible part of the frame (0..1) and where it was drawn last, in the
+   640x480 units of the game picture */
+static f32 tex_u0 = 0.0f, tex_u1 = 1.0f, tex_v0 = 0.0f, tex_v1 = 1.0f;
+static f32 pic_x = 0.0f, pic_y = 0.0f, pic_w = 640.0f, pic_h = 480.0f;
+
+static int crop_scale(void)
+{
+  return (config.render && interlaced) ? 2 : 1;
+}
+
+/* The borders Genesis Plus GX draws around the picture (see gx_video.c) */
+static void crop_border_get(int border[AUTOCROP_SIDES])
+{
+  int x = 0, y = 0, left = 0;
+  int source = bitmap.viewport.w + 2 * bitmap.viewport.x;
+
+  memset(border, 0, sizeof(int) * AUTOCROP_SIDES);
+  if (pico32x_active || (source <= 0))
+  {
+    left_blank_frames = 0;
+    return;
+  }
+
+  if (bitmap.viewport.x > 0) x = bitmap.viewport.x;
+  if (bitmap.viewport.y > 0) y = bitmap.viewport.y;
+  border[AUTOCROP_TOP] = border[AUTOCROP_BOTTOM] = y;
+
+  if ((system_hw == SYSTEM_GG) && !config.gg_extra)
+  {
+    if (bitmap.viewport.x > 0)
+      x += 48;
+    if ((bitmap.viewport.y > 0) && (bitmap.viewport.h > 144))
+    {
+      border[AUTOCROP_TOP] += (bitmap.viewport.h - 144) / 2;
+      border[AUTOCROP_BOTTOM] += bitmap.viewport.h - 144 - (bitmap.viewport.h - 144) / 2;
+    }
+    left_blank_frames = 0;
+  }
+  else if ((reg[0] & 0x20) && (system_hw >= SYSTEM_MARKIII))
+  {
+    if (left_blank_frames < LEFT_BLANK_FRAMES)
+      left_blank_frames++;
+    if (left_blank_frames >= LEFT_BLANK_FRAMES)
+      left = 8;
+  }
+  else
+  {
+    left_blank_frames = 0;
+  }
+
+  border[AUTOCROP_LEFT] = ((x + left) * (int)vwidth) / source;
+  border[AUTOCROP_RIGHT] = (x * (int)vwidth) / source;
+}
+
+/* Measures the frame (the bitmap in 4x4 tiles, as on the Wii) */
+static void crop_measure(void)
+{
+  autocrop_frame frame;
+  const int vscale = crop_scale();
+  if ((vheight > LINE_BLANK_ROWS) || (vwidth & 3))
+    return;
+  frame.pixels = (const uint16_t *)bitmap.data;
+  frame.pitch = vwidth;
+  frame.tiled = 1;
+  frame.x0 = crop_border[AUTOCROP_LEFT];
+  frame.y0 = crop_border[AUTOCROP_TOP] * vscale;
+  frame.width = (int)vwidth - crop_border[AUTOCROP_LEFT] - crop_border[AUTOCROP_RIGHT];
+  frame.height = (int)vheight - (crop_border[AUTOCROP_TOP] + crop_border[AUTOCROP_BOTTOM]) * vscale;
+  frame.vscale = vscale;
+  frame.hardware_rows = pico32x_active ? NULL : (line_blank_rows + frame.y0);
+  if ((frame.width > 0) && (frame.height > 0))
+    autocrop_process(&autocrop, &frame);
+}
+
+/* once a frame, before it is drawn */
+static void crop_update(void)
+{
+  if (config.autocrop != autocrop_mode)
+  {
+    autocrop_mode = config.autocrop;
+    autocrop_reset_tracking(&autocrop);
+  }
+  if (autocrop_mode != AUTOCROP_OFF)
+  {
+    int border[AUTOCROP_SIDES];
+    crop_border_get(border);
+    if (memcmp(border, crop_border, sizeof(crop_border)))
+    {
+      memcpy(crop_border, border, sizeof(crop_border));
+      autocrop_reset_tracking(&autocrop);
+    }
+    crop_measure();
+  }
+}
+
+void gx_video_AutoCropReset(void)
+{
+  autocrop_reset_tracking(&autocrop);
+}
+
+/* The learned layouts are kept next to the game's backup RAM, as <game>.autocrop */
+void gx_video_AutoCropLoad(void)
+{
+  char filename[MAXPATHLEN];
+  autocrop_reset(&autocrop);
+  autocrop_mode = config.autocrop;
+  memset(crop_border, 0, sizeof(crop_border));
+  left_blank_frames = 0;
+  if (!config.s_device && rom_filename[0])
+  {
+    snprintf(filename, sizeof(filename), "%s/saves/%s.autocrop", DEFAULT_PATH, rom_filename);
+    autocrop_load_layouts(&autocrop, filename);
+  }
+}
+
+void gx_video_AutoCropSave(void)
+{
+  char filename[MAXPATHLEN];
+  if (autocrop.layouts_changed && !config.s_device && rom_filename[0])
+  {
+    snprintf(filename, sizeof(filename), "%s/saves/%s.autocrop", DEFAULT_PATH, rom_filename);
+    autocrop_save_layouts(&autocrop, filename);
+  }
+}
+
+/* Bezels: a PNG of /genplusultimate/bezels (or the built-in one) over the
+   whole picture; the game fills its transparent window, or is in front of
+   it at its usual size when it has none. */
+static int bezel_find(const char *name, char *path)
+{
+  struct stat st;
+  unsigned int i;
+  for (i = 0; i < sizeof(bezel_places) / sizeof(bezel_places[0]); i++)
+  {
+    snprintf(path, MAXPATHLEN, "%s%s/%s", bezel_places[i], BEZEL_FOLDER, name);
+    if ((stat(path, &st) == 0) && !S_ISDIR(st.st_mode))
+      return 1;
+  }
+  path[0] = 0;
+  return 0;
+}
+
+static int bezel_file(char *path)
+{
+  char name[256 + 8];
+  path[0] = 0;
+  if (!config.bezel[0])
+    return 0;
+  if (!strcmp(config.bezel, BEZEL_DEFAULT))
+  {
+    strcpy(path, BEZEL_DEFAULT);
+    return 1;
+  }
+  if (strcmp(config.bezel, BEZEL_AUTO))
+    return bezel_find(config.bezel, path);
+  if (rom_filename[0])
+  {
+    snprintf(name, sizeof(name), "%s.png", rom_filename);
+    if (bezel_find(name, path))
+      return 1;
+  }
+  if (bezel_find("default.png", path))
+    return 1;
+  strcpy(path, BEZEL_DEFAULT);
+  return 1;
+}
+
+/* the bezel texture of bezel.c (GX RGBA8: 4x4 tiles of AR then GB) to SDL */
+static SDL_Texture *bezel_texture(const bezel_image *b)
+{
+  SDL_Surface *s;
+  SDL_Texture *t;
+  int x, y, tiles = b->tex_width >> 2;
+  if (!b->texture || (b->width <= 0) || (b->height <= 0))
+    return NULL;
+  s = SDL_CreateRGBSurfaceWithFormat(0, b->width, b->height, 32, SDL_PIXELFORMAT_RGBA32);
+  if (!s) return NULL;
+  for (y = 0; y < b->height; y++)
+  {
+    u8 *row = (u8 *)s->pixels + y * s->pitch;
+    for (x = 0; x < b->width; x++)
+    {
+      const u8 *tile = (const u8 *)b->texture + (((y >> 2) * tiles + (x >> 2)) << 6);
+      int p = (((y & 3) << 2) | (x & 3)) << 1;
+      row[x * 4 + 0] = tile[p + 1];
+      row[x * 4 + 1] = tile[32 + p];
+      row[x * 4 + 2] = tile[32 + p + 1];
+      row[x * 4 + 3] = tile[p];
+    }
+  }
+  t = SDL_CreateTextureFromSurface(renderer, s);
+  SDL_FreeSurface(s);
+  if (t)
+  {
+    SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+  }
+  return t;
+}
+
+static void bezel_update(void)
+{
+  char path[MAXPATHLEN];
+  int ok;
+  if (!bezel_file(path))
+  {
+    if (bezel_tex) SDL_DestroyTexture(bezel_tex);
+    bezel_tex = NULL;
+    bezel_free(&bezel);
+    bezel_path[0] = 0;
+    return;
+  }
+  if (!strcmp(path, bezel_path))
+    return; /* loaded already (or not a PNG) */
+
+  snprintf(bezel_path, sizeof(bezel_path), "%s", path);
+  if (bezel_tex) SDL_DestroyTexture(bezel_tex);
+  bezel_tex = NULL;
+  ok = !strcmp(path, BEZEL_DEFAULT) ?
+       bezel_load_memory(&bezel, Bezel_default_png, Bezel_default_png_size, 640, 480) :
+       bezel_load(&bezel, path, 640, 480);
+  if (ok)
+  {
+    LOCK();
+    bezel_tex = bezel_texture(&bezel);
+    UNLOCK();
+  }
+}
+
+int gx_video_BezelList(char (*names)[BEZEL_NAME_MAX], int max)
+{
+  char dir[MAXPATHLEN];
+  unsigned int i;
+  int count = 0;
+  for (i = 0; i < sizeof(bezel_places) / sizeof(bezel_places[0]); i++)
+  {
+    snprintf(dir, sizeof(dir), "%s%s", bezel_places[i], BEZEL_FOLDER);
+    count = bezel_list(dir, names, count, max);
+  }
+  return count;
+}
+
+/* Sharp scaling (no bilinear filter, picture cropped or in a bezel): the
+   crop enlarged by whole numbers with nearest sampling, then smoothed to its
+   size, so that every pixel looks the same */
+static int sharp_copy(const SDL_Rect *src, const SDL_Rect *dst)
+{
+  int nx, ny;
+  SDL_Rect big;
+  if (!SDL_RenderTargetSupported(renderer) || (src->w <= 0) || (src->h <= 0))
+    return 0;
+  nx = (int)ceilf((f32)dst->w / src->w - 0.01f);
+  ny = (int)ceilf((f32)dst->h / src->h - 0.01f);
+  if (nx < 1) nx = 1;
+  if (ny < 1) ny = 1;
+  while ((nx > 1) && (src->w * nx > SHARP_MAX)) nx--;
+  while ((ny > 1) && (src->h * ny > SHARP_MAX)) ny--;
+  if ((src->w * nx == dst->w) && (src->h * ny == dst->h))
+    return 0; /* already even */
+
+  big.x = 0; big.y = 0; big.w = src->w * nx; big.h = src->h * ny;
+  if (!sharp_tex || (sharp_tex_w < big.w) || (sharp_tex_h < big.h))
+  {
+    if (sharp_tex) SDL_DestroyTexture(sharp_tex);
+    sharp_tex_w = (big.w > 1024) ? SHARP_MAX : 1024;
+    sharp_tex_h = (big.h > 1024) ? SHARP_MAX : 1024;
+    sharp_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, sharp_tex_w, sharp_tex_h);
+    if (!sharp_tex) return 0;
+    SDL_SetTextureScaleMode(sharp_tex, SDL_ScaleModeLinear);
+  }
+
+  SDL_SetRenderTarget(renderer, sharp_tex);
+  SDL_SetTextureScaleMode(screen_tex, SDL_ScaleModeNearest);
+  SDL_SetTextureAlphaMod(screen_tex, 255);
+  SDL_RenderCopy(renderer, screen_tex, src, &big);
+  SDL_SetRenderTarget(renderer, NULL);
+  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+  SDL_RenderCopy(renderer, sharp_tex, &big, dst);
+  return 1;
+}
+
 static void draw_game(u8 alpha)
 {
-  SDL_Rect r;
+  const f32 sx = (f32)SCREEN_W / 640.0f, sy = (f32)SCREEN_H / 480.0f;
+  SDL_Rect area, src, dst;
+  f32 xsize = 1.0f, ysize = 1.0f, cx, cy, dw, dh;
+  int hole, cropped;
+
   if (!screen_tex || !screen_ready) return;
-  r = game_rect();
-  if ((r.w < 640) || (r.h < 480))
+
+  hole = bezel_tex && bezel.hole_w;
+  area = game_rect();
+  if (hole)
+  {
+    area.x = bezel.hole_x; area.y = bezel.hole_y;
+    area.w = bezel.hole_w; area.h = bezel.hole_h;
+  }
+  if (bezel_tex || (area.w < 640) || (area.h < 480) || (autocrop_mode != AUTOCROP_OFF))
     gxDrawRectangle(0, 0, 640, 480, 255, (GXColor)BLACK);
+
+  /* visible part of the frame and its size (auto crop) */
+  tex_u0 = tex_v0 = 0.0f;
+  tex_u1 = tex_v1 = 1.0f;
+  if ((autocrop_mode != AUTOCROP_OFF) && (area.w > 0) && (area.h > 0))
+  {
+    f32 xroom = hole ? 1.0f : 640.0f / area.w;
+    f32 yroom = hole ? 1.0f : 480.0f / area.h;
+    autocrop_view_border(&autocrop, autocrop_mode, vwidth, vheight / crop_scale(), crop_border, xroom, yroom,
+                         &tex_u0, &tex_u1, &tex_v0, &tex_v1, &xsize, &ysize);
+  }
+  cropped = !((tex_u0 == 0.0f) && (tex_u1 == 1.0f) && (tex_v0 == 0.0f) && (tex_v1 == 1.0f));
+
+  src.x = (int)(tex_u0 * vwidth + 0.5f);
+  src.y = (int)(tex_v0 * vheight + 0.5f);
+  src.w = (int)(tex_u1 * vwidth + 0.5f) - src.x;
+  src.h = (int)(tex_v1 * vheight + 0.5f) - src.y;
+  if ((src.w <= 0) || (src.h <= 0)) return;
+
+  /* in screen pixels */
+  cx = (area.x + area.w * 0.5f) * sx;
+  cy = (area.y + area.h * 0.5f) * sy;
+  dw = area.w * sx * xsize;
+  dh = area.h * sy * ysize;
+  if (cropped && (config.autocrop_scale == AUTOCROP_SCALE_INTEGER))
+  {
+    int nx = (int)(dw / src.w + 0.01f), ny = (int)(dh / src.h + 0.01f);
+    if (nx < 1) nx = 1;
+    if (ny < 1) ny = 1;
+    dw = (f32)(src.w * nx);
+    dh = (f32)(src.h * ny);
+  }
+  dst.x = (int)(cx - dw * 0.5f + 0.5f);
+  dst.y = (int)(cy - dh * 0.5f + 0.5f);
+  dst.w = (int)(dw + 0.5f);
+  dst.h = (int)(dh + 0.5f);
+
+  pic_x = dst.x / sx; pic_y = dst.y / sy;
+  pic_w = dst.w / sx; pic_h = dst.h / sy;
+
   LOCK();
-  SDL_SetTextureAlphaMod(screen_tex, alpha);
-  SDL_RenderCopy(renderer, screen_tex, NULL, &r);
+  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+  if (bezel_tex && !hole)
+  {
+    SDL_SetTextureAlphaMod(bezel_tex, alpha);
+    SDL_RenderCopy(renderer, bezel_tex, NULL, NULL); /* background */
+  }
+
+  if (config.bilinear || !(cropped || bezel_tex) || !sharp_copy(&src, &dst))
+  {
+    SDL_SetTextureAlphaMod(screen_tex, alpha);
+    SDL_RenderCopy(renderer, screen_tex, &src, &dst);
+  }
+  else
+  {
+    SDL_SetTextureScaleMode(screen_tex, SDL_ScaleModeNearest);
+  }
+
+  if (bezel_tex && hole)
+  {
+    SDL_SetTextureAlphaMod(bezel_tex, alpha);
+    SDL_RenderCopy(renderer, bezel_tex, NULL, NULL); /* around the game */
+  }
+  SDL_RenderSetScale(renderer, sx, sy);
   UNLOCK();
 }
 
@@ -740,27 +1120,36 @@ void gxSaveScreenshot(char *filename)
   }
 }
 
-static void screen_point(int px, int py, int *x, int *y)
+/* frame pixel (borders included) to the picture as drawn (auto crop too) */
+static void screen_point(int px, int py, int clamp, int *x, int *y)
 {
-  SDL_Rect r = game_rect();
-  *x = r.x + (px * r.w) / (bitmap.viewport.w + 2 * bitmap.viewport.x);
-  *y = r.y + (py * r.h) / (bitmap.viewport.h + 2 * bitmap.viewport.y);
+  f32 u = (f32)px / (bitmap.viewport.w + 2 * bitmap.viewport.x);
+  f32 v = (f32)py / (bitmap.viewport.h + 2 * bitmap.viewport.y);
+  if (clamp)
+  {
+    if (u < tex_u0) u = tex_u0; else if (u > tex_u1) u = tex_u1;
+    if (v < tex_v0) v = tex_v0; else if (v > tex_v1) v = tex_v1;
+  }
+  *x = (int)(pic_x + ((u - tex_u0) / (tex_u1 - tex_u0)) * pic_w);
+  *y = (int)(pic_y + ((v - tex_v0) / (tex_v1 - tex_v0)) * pic_h);
 }
 
+/* screen position (0..1 across the picture) to the frame (lightguns) */
 void gx_video_MapPointer(f32 fx, f32 fy, int *x, int *y)
 {
-  SDL_Rect r = game_rect();
-  f32 qx = (fx * 640.0f - r.x) / r.w;
-  f32 qy = (fy * 480.0f - r.y) / r.h;
-  *x = (int)(qx * (bitmap.viewport.w + 2 * bitmap.viewport.x)) - bitmap.viewport.x;
-  *y = (int)(qy * (bitmap.viewport.h + 2 * bitmap.viewport.y)) - bitmap.viewport.y;
+  f32 qx = (fx * 640.0f - pic_x) / pic_w;
+  f32 qy = (fy * 480.0f - pic_y) / pic_h;
+  f32 u = tex_u0 + qx * (tex_u1 - tex_u0);
+  f32 v = tex_v0 + qy * (tex_v1 - tex_v0);
+  *x = (int)(u * (bitmap.viewport.w + 2 * bitmap.viewport.x)) - bitmap.viewport.x;
+  *y = (int)(v * (bitmap.viewport.h + 2 * bitmap.viewport.y)) - bitmap.viewport.y;
 }
 
 static void draw_crosshair(gx_texture *texture, int x, int y)
 {
   int w = texture->width, h = texture->height;
   if (config.aspect & 2) w = (w * 3) / 4;
-  screen_point(x + bitmap.viewport.x, y + bitmap.viewport.y, &x, &y);
+  screen_point(x + bitmap.viewport.x, y + bitmap.viewport.y, 0, &x, &y);
   gxDrawTexture(texture, x - w / 2, y - h / 2, w, h, 255);
 }
 
@@ -768,20 +1157,14 @@ static void draw_cd_leds(gx_texture *l, gx_texture *r)
 {
   int w = l->width, h = l->height, xl, xr, y;
   if (config.aspect & 2) w = (w * 3) / 4;
-  screen_point(bitmap.viewport.x, bitmap.viewport.y + bitmap.viewport.h - 4, &xl, &y);
-  screen_point(bitmap.viewport.x + bitmap.viewport.w, bitmap.viewport.y + bitmap.viewport.h - 4, &xr, &y);
+  screen_point(bitmap.viewport.x, bitmap.viewport.y + bitmap.viewport.h - 4, 1, &xl, &y);
+  screen_point(bitmap.viewport.x + bitmap.viewport.w, bitmap.viewport.y + bitmap.viewport.h - 4, 1, &xr, &y);
   xl += 8;
   xr -= 8 + w;
   y -= h;
   gxDrawTexture(l, xl, y, w, h, 255);
   gxDrawTexture(r, xr, y, w, h, 255);
 }
-
-/* bezels and auto crop: not on the Wii U yet */
-void gx_video_AutoCropLoad(void) {}
-void gx_video_AutoCropSave(void) {}
-void gx_video_AutoCropReset(void) {}
-int gx_video_BezelList(char (*names)[BEZEL_NAME_MAX], int max) { (void)names; (void)max; return 0; }
 
 /* Emulation mode -> Menu mode */
 void gx_video_Stop(void)
@@ -891,6 +1274,9 @@ void gx_video_Start(void)
     osd = 1;
   }
 
+  /* bezel of the game */
+  bezel_update();
+
   /* the sound sets the speed (wiiu_audio.c) */
   videoSync = 0;
   frameCount = 0;
@@ -918,10 +1304,14 @@ int gx_video_Update(int status)
       if (vwidth > 720) vwidth = 720;
       if (vheight > 576) vheight = 576;
       bitmap.viewport.changed &= ~1;
+
+      /* new frame size: forget the current crop (learned layouts are kept) */
+      autocrop_reset_tracking(&autocrop);
     }
 
     if ((vwidth > 0) && (vheight > 0))
     {
+      crop_update();
       untile();
 
       LOCK();
