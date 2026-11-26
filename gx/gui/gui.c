@@ -64,6 +64,26 @@ static int md_keys(void)
 }
 #endif
 
+#ifdef HW_WUP
+/* Wii U widescreen menu (wiiu/wiiu_video.c): what is at the sides of the
+   Wii screen stays at the sides of the 16:9 picture (title, key helpers,
+   logo, Play / Shot / Info), the rest is centered */
+extern void wiiu_set_anchor(int side);
+extern int wiiu_anchor_dx(int side);
+static int butn_side(gui_butn *b)
+{
+  if (b->w > 100) return 0;
+  return (b->x <= 16) ? -1 : ((b->x >= 546) ? 1 : 0);
+}
+static int image_side(gui_image *im)
+{
+  return ((im->data == Main_logo_png) && (im->x >= 400)) ? 1 : 0;
+}
+#define ANCHOR(side) wiiu_set_anchor(side)
+#else
+#define ANCHOR(side)
+#endif
+
 /* Key helpers at the bottom of a menu: the button to go back (left) and the
    one to confirm (right), each with its comment */
 static void draw_helpers(gui_menu *menu)
@@ -76,6 +96,7 @@ static void draw_helpers(gui_menu *menu)
 
   /* left comment */
   item = menu->helpers[0];
+  ANCHOR(-1);
   if (item)
   {
     if (item->data && strlen(item->comment))
@@ -96,6 +117,7 @@ static void draw_helpers(gui_menu *menu)
 
   /* right comment */
   item = menu->helpers[1];
+  ANCHOR(1);
   if (item)
   {
     if (item->data && strlen(item->comment))
@@ -113,6 +135,7 @@ static void draw_helpers(gui_menu *menu)
       FONT_alignRight(item->comment,16,x,item->y+(item->h-16)/2+16,(GXColor)WHITE);
     }
   }
+  ANCHOR(0);
 }
 
 #ifdef HW_RVL
@@ -407,6 +430,9 @@ void GUI_DrawMenu(gui_menu *menu)
   for (i=0; i<menu->max_images; i++)
   {
     image = &menu->bg_images[i];
+#ifdef HW_WUP
+    ANCHOR(image_side(image));
+#endif
     if (image->state & IMAGE_VISIBLE)
     {
       if (image->state & IMAGE_REPEAT)
@@ -416,13 +442,20 @@ void GUI_DrawMenu(gui_menu *menu)
     }
   }
 
+  ANCHOR(0);
+
   /* menu title */
+  ANCHOR(-1);
   FONT_write(menu->title, 22,10,56,640,(GXColor)WHITE);
+  ANCHOR(0);
 
   /* draw buttons + items */
   for (i=0; i<menu->max_buttons; i++)
   {
     button = &menu->buttons[i];
+#ifdef HW_WUP
+    ANCHOR(butn_side(button));
+#endif
 
     if (button->state & BUTTON_VISIBLE)
     {
@@ -468,6 +501,8 @@ void GUI_DrawMenu(gui_menu *menu)
       }
     }
   }
+
+  ANCHOR(0);
 
   /* draw arrow */
   for (i=0; i<2; i++)
@@ -570,6 +605,9 @@ void GUI_DrawMenuFX(gui_menu *menu, u8 speed, u8 out)
     for (i=0; i<menu->max_images; i++)
     {
       image = &menu->bg_images[i];
+#ifdef HW_WUP
+      ANCHOR(image_side(image));
+#endif
 
       /* X offset */
       if (image->state & IMAGE_SLIDE_LEFT)
@@ -611,16 +649,23 @@ void GUI_DrawMenuFX(gui_menu *menu, u8 speed, u8 out)
       }
     }
 
+    ANCHOR(0);
+
     /* menu title */
+    ANCHOR(-1);
     if ((menu->bg_images[2].state & IMAGE_SLIDE_TOP) || (menu->bg_images[3].state & IMAGE_SLIDE_TOP))
       FONT_write(menu->title, 22,10,out ? (56 + temp - max_offset) : (56 - temp),640,(GXColor)WHITE);
     else
       FONT_write(menu->title, 22,10,56,640,(GXColor)WHITE);
+    ANCHOR(0);
 
     /* draw buttons + items */
     for (i=0; i<menu->max_buttons; i++)
     {
       button = &menu->buttons[i];
+#ifdef HW_WUP
+      ANCHOR(butn_side(button));
+#endif
 
       if (button->state & BUTTON_VISIBLE)
       {
@@ -694,6 +739,8 @@ void GUI_DrawMenuFX(gui_menu *menu, u8 speed, u8 out)
         }
       }
     }
+
+    ANCHOR(0);
 
     /* draw arrow */
     for (i=0; i<2; i++)
@@ -854,7 +901,12 @@ int GUI_UpdateMenu(gui_menu *menu)
       button = &menu->buttons[i];
       if ((button->state & BUTTON_ACTIVE) && (button->state & BUTTON_VISIBLE))
       {
-        if((x>=button->x)&&(x<=(button->x+button->w))&&(y>=button->y)&&(y<=(button->y+button->h)))
+#ifdef HW_WUP
+        int bx = button->x + wiiu_anchor_dx(butn_side(button));
+#else
+        int bx = button->x;
+#endif
+        if((x>=bx)&&(x<=(bx+button->w))&&(y>=button->y)&&(y<=(button->y+button->h)))
         {
           selected = i;
           break;

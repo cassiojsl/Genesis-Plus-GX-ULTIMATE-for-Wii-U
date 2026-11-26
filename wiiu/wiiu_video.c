@@ -342,6 +342,7 @@ void gxTextureClose(gx_texture **p_texture)
 #define BANNER_EDGE   72                      /* their ends, with the corners of the frame */
 
 static int view_ox;      /* where the 640 wide Wii screen starts */
+static int anchor_dx;    /* moves what is at a side of the Wii screen to that side of the picture */
 static int view_w;       /* the whole width, in the same units */
 
 static void set_menu_view(void)
@@ -359,6 +360,7 @@ static void set_menu_view(void)
 
 static void set_game_view(void)
 {
+  anchor_dx = 0;
   view_ox = 0;
   view_w = 640;
   SDL_RenderSetScale(renderer, (float)SCREEN_W / 640.0f, (float)SCREEN_H / 480.0f);
@@ -375,12 +377,28 @@ void wiiu_menu_point(float fx, float fy, float *x, float *y)
   *y = fy * 480.0f;
 }
 
+/* the side (-1 left, 0 centered, 1 right) what is drawn next belongs to */
+void wiiu_set_anchor(int side)
+{
+  anchor_dx = side * view_ox;
+}
+
+int wiiu_anchor_dx(int side)
+{
+#if WIIU_WIDE_MENU
+  return side * MENU_OX;
+#else
+  (void)side;
+  return 0;
+#endif
+}
+
 /* covers the whole width of the Wii screen */
 #define FULL_WIDTH(x, w) (((x) <= 0) && ((x) + (w) >= 640))
 
 void gxDrawRectangle(s32 x, s32 y, s32 w, s32 h, u8 alpha, GXColor color)
 {
-  SDL_Rect r = { x + view_ox, y, w, h };
+  SDL_Rect r = { x + view_ox + anchor_dx, y, w, h };
   if (FULL_WIDTH(x, w)) { r.x = 0; r.w = view_w; }
   LOCK();
   SDL_SetRenderDrawBlendMode(renderer, (alpha == 255) ? SDL_BLENDMODE_NONE : SDL_BLENDMODE_BLEND);
@@ -404,7 +422,7 @@ static void banner_piece(wiiu_tex *t, gx_texture *texture, int bw, int sx, int s
 void gxDrawTexture(gx_texture *texture, s32 x, s32 y, s32 w, s32 h, u8 alpha)
 {
   wiiu_tex *t = tex_of(texture);
-  SDL_Rect r = { x + view_ox, y, w, h };
+  SDL_Rect r = { x + view_ox + anchor_dx, y, w, h };
   if (!t || !t->tex) return;
   LOCK();
   SDL_SetTextureAlphaMod(t->tex, alpha);
@@ -447,7 +465,7 @@ void gxDrawTexture(gx_texture *texture, s32 x, s32 y, s32 w, s32 h, u8 alpha)
 void gxDrawTextureRotate(gx_texture *texture, s32 x, s32 y, s32 w, s32 h, f32 angle, u8 alpha)
 {
   wiiu_tex *t = tex_of(texture);
-  SDL_Rect r = { x + view_ox, y, w, h };
+  SDL_Rect r = { x + view_ox + anchor_dx, y, w, h };
   if (!t || !t->tex) return;
   LOCK();
   SDL_SetTextureAlphaMod(t->tex, alpha);
@@ -1070,7 +1088,7 @@ static void draw_char(font_cache *f, u8 c, int x, int y, GXColor color)
   SDL_Rect r;
   glyph_load(f, c);
   if (!f->glyph[c]) return;
-  r.x = x + view_ox;
+  r.x = x + view_ox + anchor_dx;
   r.y = y - f->size;
   r.w = (int)(f->gw[c] / font_scale + 0.5f);
   r.h = (int)(f->gh[c] / font_scale + 0.5f);
