@@ -4642,7 +4642,16 @@ void mainmenu(void)
 
   while (quit == 0)
   {
-    switch (GUI_RunMenu(m))
+    int sel;
+#ifdef HW_WUP
+    /* the HOME Menu of the Wii U opens from the main menu only */
+    wiiu_home_menu(1);
+    sel = GUI_RunMenu(m);
+    wiiu_home_menu(0);
+#else
+    sel = GUI_RunMenu(m);
+#endif
+    switch (sel)
     {
       /*** Load Game Menu ***/
       case 0:

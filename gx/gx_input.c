@@ -55,6 +55,9 @@
 #ifdef HW_RVL
 /* USB Xbox 360 / XInput controllers merged into the GameCube pad calls */
 #include "usbpad_shim.h"
+#ifdef HW_WUP
+#include "wiiu_bridge.h"
+#endif
 #endif
 
 /* Analog sticks sensitivity */
@@ -1871,6 +1874,11 @@ void gx_input_Config(u8 chan, u8 device, u8 type)
     }
   }
 
+#ifdef HW_WUP
+  /* HOME ends the setup (as on the Wii): the HOME Menu of the Wii U must not take it */
+  wiiu_home_menu(0);
+#endif
+
   /* Input device */
   switch (device)
   {
@@ -1888,6 +1896,7 @@ void gx_input_Config(u8 chan, u8 device, u8 type)
       break;
     }
   }
+
 }
 
 void gx_input_UpdateEmu(void)
@@ -1940,6 +1949,26 @@ void gx_input_UpdateEmu(void)
       player ++;
     }
   }
+
+#ifdef HW_WUP
+  /* The GamePad also plays as player 1 when player 1 uses another controller
+     and no player uses the GamePad (it is in the hands of player 1) */
+  for (i=0; i<MAX_DEVICES; i++)
+  {
+    if (input.dev[i] != NO_DEVICE)
+    {
+      int p, drc_used = 0;
+      for (p=0; p<player; p++)
+        if (config.input[p].device == (WPAD_EXP_CLASSIC + 2)) drc_used = 1;
+      if (!drc_used && (config.input[0].device >= 0) && WiiDRC_Inited() && WiiDRC_Connected() &&
+          ((input.dev[i] == DEVICE_PAD3B) || (input.dev[i] == DEVICE_PAD6B) || (input.dev[i] == DEVICE_PAD2B)))
+      {
+        wpad_update(0, i, WPAD_EXP_CLASSIC + 1);
+      }
+      break;
+    }
+  }
+#endif
 
   /* Update RAM patches */
   RAMCheatUpdate();

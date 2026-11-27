@@ -1298,8 +1298,6 @@ static void draw_cd_leds(gx_texture *l, gx_texture *r)
 /* Emulation mode -> Menu mode */
 void gx_video_Stop(void)
 {
-  wiiu_home_menu(1);
-
   /* the menus keep their own pace (VIDEO_WaitVSync) */
   wiiu_vsync = 0;
   LOCK();

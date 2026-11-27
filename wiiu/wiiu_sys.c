@@ -27,6 +27,7 @@
 #include <padscore/wpad.h>
 #include <sysapp/launch.h>
 #include <SDL.h>
+#include "wiiu_ax.h"
 
 #include "wiiu_bridge.h"
 #include <mocha/mocha.h>
@@ -70,13 +71,13 @@ void wiiu_input_init(void)
 }
 
 /****************************************************************************
- * HOME Menu of the Wii U: allowed in the menus of the emulator (once HOME
+ * HOME Menu of the Wii U: allowed in the main menu of the emulator (once HOME
  * is released, so the press that opened the menu does not open it too),
  * never while a game runs. While it is allowed, the system takes HOME: the
  * menus do not see it.
  ****************************************************************************/
 
-static int home_wanted = 1, home_enabled, home_held;
+static int home_wanted, home_enabled, home_held;
 
 void wiiu_home_menu(int allowed)
 {
@@ -469,6 +470,7 @@ int wiiu_system_font(const void **data, uint32_t *size)
 
 void wiiu_exit(void)
 {
+  wiiu_ax_stop();
   wiiu_usb_unmount();
   SYSLaunchMenu();
   for (;;)

@@ -185,7 +185,7 @@ static const char *option_value(const char *key)
 void pico32x_config_default(void)
 {
 #ifdef HW_WUP
-  config.p32x_drc = 0;              /* Wii U: experimental, off by default */
+  config.p32x_drc = 1;              /* Wii U: on (used only if the JIT area works) */
 #else
   config.p32x_drc = 1;              /* as tested on the Wii: full speed */
 #endif

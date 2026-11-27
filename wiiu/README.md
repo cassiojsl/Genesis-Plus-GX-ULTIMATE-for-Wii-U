@@ -25,7 +25,7 @@ A USB drive is only for games: the file browser starts at its root, and saves an
 
 ## Controls
 
-- **Wii U GamePad**: player 1 by default. In the menus: D-Pad / left stick to move, **A** to confirm, **B** to go back, **+ / L / ZL** and **− / R / ZR** to change values, and the **touch screen** to point and tap the buttons.
+- **Wii U GamePad**: player 1 by default; when player 1 uses another controller and no player uses the GamePad, the GamePad also plays as player 1. In the menus: D-Pad / left stick to move, **A** to confirm, **B** to go back, **+ / L / ZL** and **− / R / ZR** to change values, and the **touch screen** to point and tap the buttons.
 - **Wii Remote** (pointer, with or without Nunchuk), **Classic Controller** and **Wii U Pro Controller**: as in the Wii version.
 - **HOME** opens the emulator menu while playing (as on the Wii). **HOME** again in the emulator menu opens the Wii U HOME Menu.
 - Keys can be set per player in Settings > Controls, as on the Wii.
@@ -37,7 +37,7 @@ A USB drive is only for games: the file browser starts at its root, and saves an
 - Storage: the SD card and FAT32 USB drives (no DVD drive, no GameCube memory cards). The data folder is `sd:/wiiu/apps/genplusultimate/`, next to the app.
 - GameCube controllers (through the Wii U GameCube adapter), USB pads (Xbox 360) and the USB mouse are not supported yet.
 - Video: the picture is 16:9: ORIGINAL (4:3) keeps the game at 4:3, and PIXEL PERFECT (in place of ORIGINAL (16:9)) draws each pixel of the game as the same whole number of screen pixels. Auto Crop is on (FIT) by default. VSync shows the picture without tearing. The Gamma Correction setting is applied to the game picture in software; the Trap Filter (Wii VI hardware) has no effect.
-- Sega 32X: PicoDrive's SH-2 recompiler (Dynamic Recompiler in System > 32X Settings) uses the JIT (codegen) area that Aroma gives to the app. It is experimental on the Wii U and off by default.
+- Sega 32X: PicoDrive's SH-2 recompiler (Dynamic Recompiler in System > 32X Settings) uses the JIT (codegen) area that Aroma gives to the app. It is on by default, and used only if the JIT area works.
 - It has the fixes of the official Genesis Plus GX up to November 11, 2026.
 
 ## Build

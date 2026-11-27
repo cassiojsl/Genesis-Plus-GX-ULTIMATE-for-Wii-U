@@ -36,6 +36,7 @@
 #include <string.h>
 #include "wiiu_audio.h"
 #include "wiiu_bridge.h"
+#include "wiiu_ax.h"
 
 #define RATE 48000
 
@@ -183,6 +184,28 @@ static void mix(void *user, Uint8 *stream, int len)
     memset(stream + frames * 4, 0, len - frames * 4);
 }
 
+#ifdef __WIIU__
+/* AX, the sound library of the Wii U, directly (wiiu_ax.c): the AX driver
+   of SDL hands two small buffers to AX and could let it play a buffer that
+   was being written, a loud, distorted noise */
+static void ax_fill(int16_t *lr, int n)
+{
+  mix(NULL, (Uint8 *)lr, n * 4);
+}
+
+static void open_device(void)
+{
+  if (dev) return;
+  if (!lock) lock = SDL_CreateMutex();
+  if (wiiu_ax_start(ax_fill) == 0)
+    dev = 1;
+}
+
+/* AX plays silence when there is nothing to play */
+void wiiu_asnd_idle(void)
+{
+}
+#else
 static void open_device(void)
 {
   SDL_AudioSpec want, have;
@@ -199,42 +222,10 @@ static void open_device(void)
   if (dev) SDL_PauseAudioDevice(dev, 0);
 }
 
-/* Nothing to play (no menu music, no menu sound, no game): the sound output
-   of the system is closed, and opened again by the next sound. The output
-   of the Wii U is never left running with nothing to play. */
-#define IDLE_CLOSE_MS 500
-
 void wiiu_asnd_idle(void)
 {
-  static Uint32 idle_since;
-  int i, busy = stream_on;
-  Uint32 now;
-
-  if (!dev)
-    return;
-
-  if (!busy)
-  {
-    SDL_LockMutex(lock);
-    for (i = 0; i < MAX_SND_VOICES; i++)
-      if (voices[i].active && !voices[i].paused)
-        busy = 1;
-    SDL_UnlockMutex(lock);
-  }
-
-  now = SDL_GetTicks();
-  if (busy || !idle_since)
-  {
-    idle_since = busy ? 0 : now;
-    return;
-  }
-  if ((now - idle_since) >= IDLE_CLOSE_MS)
-  {
-    SDL_CloseAudioDevice(dev);
-    dev = 0;
-    idle_since = 0;
-  }
 }
+#endif
 
 void ASND_Init(void)
 {
