@@ -1,11 +1,10 @@
 # Genesis Plus GX ULTIMATE for Wii U
 
-This is a native port of **Genesis Plus GX ULTIMATE** (by VrepliroidV) for the Wii U, an enhanced version of Eke-Eke's [Genesis Plus GX](https://github.com/ekeeke/Genesis-Plus-GX), featuring a 720p widescreen interface that harnesses all three CPU cores and the GPU, SD card, FAT32 USB drives, full support for the GamePad, Wii Remote, Classic Controller, and Wii U Pro Controller.
+This is a native port of **Genesis Plus GX ULTIMATE** (by VrepliroidV) for the Wii U, an enhanced version of Eke-Eke's [Genesis Plus GX](https://github.com/ekeeke/Genesis-Plus-GX), featuring a widescreen interface that harnesses all three CPU cores and the GPU, SD card, FAT32 USB drives, full support for the GamePad, Wii Remote, Classic Controller, and Wii U Pro Controller.
 
 The version build also runs Sega 32X games, emulated by [PicoDrive](https://github.com/irixxxx/picodrive) (notaz, irixxxx and others; its code is in `picodrive/`, see [picodrive/README.gx.md](picodrive/README.gx.md)), with PicoDrive's settings in System > 32X Settings. Paprium runs with its cartridge chip emulated by the code of [Genesis Plus GX PUNCHiUM](https://github.com/pav1388/Genesis-Plus-GX-PUNCHiUM) (pav1388), in `core/cart_hw/punchium.c`, its music read from MP3 or OGG files in a `paprium` folder next to the ROM. It also has PNG bezels around the game and an Auto Crop of the borders in the video settings, an automatic overclock of the main and Sega CD 68k, of the Z80 of the 8-bit games and of the 32X CPUs, per-game settings, and menu music from the `genplusultimate/music` folder with a mini player. It is a separate app: `apps/genplusultimate`, with its data in `genplusultimate/` on the SD card or USB drive, so it can be installed next to Genesis Plus GX. 
 
 The RetroArch core built from this code (Windows x64, Linux x64, Linux ARM64 / ROCKNIX) has the Auto Crop and the automatic overclock as core options; it is released with tags starting with `libretro`. Downloads and details: [Releases](../../releases). The prebuilt files in `builds/` are the original Genesis Plus GX ones and do not have these changes.
-
 
 The original Genesis Plus GX readme follows.
 
