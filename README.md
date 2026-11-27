@@ -1,4 +1,4 @@
-# Genesis Plus GX ULTIMATE
+# Genesis Plus GX ULTIMATE for Wii U
 
 This is a native port of **Genesis Plus GX ULTIMATE** (by VrepliroidV) for the Wii U, an enhanced version of Eke-Eke's [Genesis Plus GX](https://github.com/ekeeke/Genesis-Plus-GX), featuring a 720p widescreen interface that harnesses all three CPU cores and the GPU, SD card, FAT32 USB drives, full support for the GamePad, Wii Remote, Classic Controller, and Wii U Pro Controller.
 
